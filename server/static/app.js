@@ -158,8 +158,17 @@ function connect() {
 startBtn.onclick = async () => {
   audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   playHead = audioCtx.currentTime;
-  connect();
-  await startMic();
+  try {
+    connect();
+    await startMic();
+  } catch (err) {
+    disclaimerEl.textContent =
+      "Couldn't reach your microphone — check the site's mic permission and try again. (" +
+      (err && err.message ? err.message : err) +
+      ")";
+    if (ws) ws.close();
+    return;
+  }
   startBtn.style.display = "none";
   casePicker.style.display = "none";
   dialControl.style.display = "flex";
