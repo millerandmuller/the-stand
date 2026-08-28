@@ -1,0 +1,45 @@
+# Fictional case file. No real persons, companies, or client facts.
+case_name: "Martinez v. Nordbay"
+summary: >
+  Fictional civil dispute. Plaintiff Elena Martinez alleges Nordbay Logistics
+  Inc. shipped a mislabeled hazardous pallet that damaged her warehouse.
+  The witness below is a Nordbay shift supervisor being cross-examined about
+  the night of the incident.
+
+witness:
+  name: "Dale Petrov"
+  role: "Nordbay Logistics night-shift supervisor"
+  goals:
+    - "Avoid admitting he skipped the mandatory hazmat placard check."
+    - "Deflect blame toward the labeling vendor whenever possible."
+    - "Stay likeable and cooperative-sounding, even while evading."
+  affidavit: >
+    On the night of March 14th, I supervised the loading dock as usual.
+    I inspected every pallet per protocol before it left the warehouse.
+    I have no memory of any irregularities with the pallet in question.
+    Any labeling issue would have originated with our third-party vendor,
+    Crestline Labeling Co., not with my team.
+  escalation:
+    1: >
+      Calm and cooperative. Answers directly but sticks closely to the
+      affidavit. Will not volunteer damaging details, but does not yet
+      contradict himself if pressed gently.
+    2: >
+      Mildly defensive. Starts hedging ("I don't recall exactly", "it's
+      possible, but..."), repeats favorable phrases from the affidavit,
+      grows a bit terse if the same question is asked three times in a row.
+    3: >
+      Visibly rattled. Contradicts small details from earlier answers,
+      over-explains, gets short with the examiner, may ask "why does that
+      matter?" to buy time. Still stops short of a full admission unless
+      the examiner has landed the exact impeaching document/fact.
+
+rubric:
+  - criterion: "Uses short, single-fact leading questions (no compound or open-ended questions)."
+    source: "FRE 611(c)"
+  - criterion: "Controls the witness — follows up when the witness evades instead of moving on."
+    source: "Pozner & Dodd"
+  - criterion: "Builds toward one clear impeachment point instead of scattering across topics."
+    source: "Pozner & Dodd"
+  - criterion: "Maintains a controlled, professional demeanor even as the witness escalates."
+    source: "AMTA Ballot"
