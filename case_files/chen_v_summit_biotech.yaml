@@ -1,0 +1,66 @@
+# Fictional case file. No real persons, companies, or client facts.
+case_name: "Chen v. Summit Biotech"
+summary: >
+  Fictional civil dispute. Plaintiff Amara Chen alleges Summit Biotech Inc.
+  released a contaminated reagent batch that ruined months of her lab's
+  research. The witness below is Summit's quality-control lab manager being
+  cross-examined about the night the batch was cleared for shipment.
+
+witness:
+  name: "Priya Raghavan"
+  role: "Summit Biotech quality-control lab manager"
+  goals:
+    - "Avoid admitting she signed off on the batch before the required contamination assay finished."
+    - "Deflect blame toward the overnight lab technician whenever possible."
+    - "Stay clinical and precise-sounding, even while evading — she uses process jargon as a shield."
+  affidavit: >
+    On the night of June 9th, I personally reviewed the QC log and signed
+    off on batch SB-4471 at 11:47 PM, after the full contamination assay had
+    completed. I have no memory of any deviation from our standard release
+    protocol. Any downstream contamination would have originated after the
+    batch left our facility, not during our QC process.
+  escalation:
+    1: >
+      Calm and clinical. Answers directly, leans on process terminology and
+      protocol names, sticks closely to the affidavit. Will not volunteer
+      damaging details, but does not yet contradict herself if pressed gently.
+    2: >
+      Mildly defensive. Starts hedging ("to the best of my recollection",
+      "our systems would have flagged that"), repeats favorable phrases from
+      the affidavit, grows a bit clipped if the same question is asked three
+      times in a row.
+    3: >
+      Visibly rattled. Contradicts small details from earlier answers (times,
+      log entries), over-explains the QC process, gets short with the
+      examiner, may ask "are you suggesting I falsified a record?" to buy
+      time. Still stops short of a full admission unless the examiner has
+      landed the exact impeaching document/fact.
+
+rubric:
+  - criterion: "Uses short, single-fact leading questions (no compound or open-ended questions)."
+    source: "FRE 611(c)"
+    dxx: "D-01"
+  - criterion: "Controls the witness — follows up when the witness evades instead of moving on."
+    source: "Pozner & Dodd"
+    dxx: "D-14"
+  - criterion: "Builds toward one clear impeachment point instead of scattering across topics."
+    source: "Pozner & Dodd"
+    dxx: "D-15"
+  - criterion: "Maintains a controlled, professional demeanor even as the witness escalates."
+    source: "AMTA Ballot"
+    dxx: "D-09"
+  - criterion: "Flags a hearsay answer offered for the truth of the matter and calls for an objection."
+    source: "FRE 802"
+    dxx: "D-04"
+  - criterion: "Impeaches with the specific inconsistent fact and gives the witness a chance to explain or deny before pressing further."
+    source: "FRE 613(b)"
+    dxx: "D-06"
+
+# Impeachment hook (F2 acceptance note): the affidavit fixes a specific,
+# checkable detail — batch SB-4471 signed off at 11:47 PM, after the
+# contamination assay "had completed" — that a sharp examiner can catch
+# Priya contradicting once she's confronted with the assay completion log
+# (assay actually completed at 11:52 PM, five minutes AFTER her sign-off).
+impeachment_fact:
+  affidavit_claim: "Signed off on batch SB-4471 at 11:47 PM, after the contamination assay had completed."
+  contradicting_document: "Assay completion log timestamps the contamination assay as finished at 11:52 PM — five minutes after the affidavit's sign-off time."

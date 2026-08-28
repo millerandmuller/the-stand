@@ -28,7 +28,13 @@ from google.genai import types
 LIVE_MODEL = "gemini-3.1-flash-live-preview"
 LIVE_MODEL_FALLBACK = "gemini-2.5-flash-native-audio-preview-12-2025"
 
-CASE_FILE = Path(__file__).parent.parent / "case_files" / "martinez_v_nordbay.yaml"
+CASE_DIR = Path(__file__).parent.parent / "case_files"
+CASE_FILE = CASE_DIR / "martinez_v_nordbay.yaml"
+DEFAULT_CASE_ID = "martinez_v_nordbay"
+CASE_FILES = {
+    "martinez_v_nordbay": CASE_DIR / "martinez_v_nordbay.yaml",
+    "chen_v_summit_biotech": CASE_DIR / "chen_v_summit_biotech.yaml",
+}
 DEFAULT_PRESSURE_LEVEL = 1
 
 DISCLAIMER = "The Stand trains technique. It does not give legal advice."
@@ -64,6 +70,14 @@ _LEGAL_ADVICE_PATTERNS = re.compile(
 
 def _load_case():
     with open(CASE_FILE, "r") as f:
+        return yaml.safe_load(f)
+
+
+def load_case(case_id: str) -> dict:
+    """Loads a case file by id (see CASE_FILES). Used by the server (F2) to
+    let the operator pick which fictional case a session runs against."""
+    path = CASE_FILES.get(case_id, CASE_FILE)
+    with open(path, "r") as f:
         return yaml.safe_load(f)
 
 
@@ -208,3 +222,72 @@ root_agent = Agent(
     instruction=witness_instruction,
     before_model_callback=guard_character,
 )
+
+
+def make_agent_for_case(case_id: str):
+    """Builds a fresh (case, Agent, stage_direction_fn) triple bound to a
+    specific case file (F2). The module-level root_agent/witness_instruction
+    above stay bound to the default case for backward compatibility with the
+    M1 tests; the server (F3 sidebar + case picker) uses this factory to run
+    a session against whichever case the operator selected."""
+    case = load_case(case_id)
+
+    def instruction(context: ReadonlyContext) -> str:
+        level = _clamp_level(
+            context.state.get("pressure_level", DEFAULT_PRESSURE_LEVEL)
+        )
+        return _build_instruction(case, level)
+
+    def guard(callback_context, llm_request: LlmRequest) -> Optional[LlmResponse]:
+        last_user_text = ""
+        for content in reversed(llm_request.contents or []):
+            if content.role == "user" and content.parts:
+                last_user_text = "".join(p.text or "" for p in content.parts)
+                break
+        if not last_user_text:
+            return None
+        witness_name = case["witness"]["name"].split()[0]
+        if _LEGAL_ADVICE_PATTERNS.search(last_user_text):
+            return LlmResponse(
+                content=types.Content(
+                    role="model",
+                    parts=[
+                        types.Part(
+                            text=(
+                                f"I'm not a lawyer, counsel — you'd have to ask your "
+                                f"own attorney about that. {DISCLAIMER}"
+                            )
+                        )
+                    ],
+                )
+            )
+        if _BREAK_CHARACTER_PATTERNS.search(last_user_text):
+            return LlmResponse(
+                content=types.Content(
+                    role="model",
+                    parts=[
+                        types.Part(
+                            text=(
+                                f"I don't follow what you're getting at. I'm "
+                                f"{witness_name}, and I'm here to answer your "
+                                f"questions — can we get back to that?"
+                            )
+                        )
+                    ],
+                )
+            )
+        return None
+
+    def stage_direction(level: int) -> str:
+        level = _clamp_level(level)
+        escalation_text = case["witness"]["escalation"][level].strip()
+        return f"[STAGE DIRECTION: escalate to pressure level {level} — {escalation_text}]"
+
+    agent = Agent(
+        name="witness_agent",
+        model=LIVE_MODEL,
+        description=f"Fictional cross-examination witness ({case['witness']['name']}) for The Stand.",
+        instruction=instruction,
+        before_model_callback=guard,
+    )
+    return case, agent, stage_direction

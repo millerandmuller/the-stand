@@ -124,9 +124,98 @@ turns) and `tests/test_pressure_dial.py` (3 sequential turns) both ran to
 completion on continuous `run_live()` connections with no framework-level
 errors.
 
+## Rubric sidebar, second case file, debrief (M2)
+
+**Second case file (F2):** `case_files/chen_v_summit_biotech.yaml` — a QC lab
+manager witness (Priya Raghavan), different evasion style from Dale (clinical
+jargon-as-shield vs. blue-collar deflection). Both case files now carry an
+`impeachment_fact` block: a specific, checkable detail in the affidavit
+(a timestamp) that contradicts a document the examiner can confront the
+witness with — the impeachment hook the demo needs.
+
+**RubricScorer (F3):** `rubric_scorer/scorer.py`. Deliberately NOT the Live
+model — a separate `gemini-3.7-flash` text-only call (per the H.T stack
+contract's Critic/Judge pattern from adk-samples/llm-auditor) that scores one
+examiner-question/witness-answer exchange at a time against the active case
+file's rubric, using Gemini structured output (`response_schema`) so every
+event is `{criterion, dxx, triggered, violation, note, score_delta}` — never
+a citation the model invented, since it can only choose from the `dxx` ids
+handed to it in the prompt. 2-3s latency behind audio is fine per the brief,
+so it's called fire-and-forget per witness turn from the server, not inline
+in the live audio path.
+
+**Wiring (`server/app.py`):** we did NOT use `adk web` / `adk api_server` for
+this — per adk-docs (Live dev guide Part 1, "FastAPI Application Example"),
+the documented, idiomatic pattern for a custom Bidi-streaming client is to
+drive `Runner.run_live()` directly from your own FastAPI WebSocket endpoint
+with an upstream task (WebSocket → `LiveRequestQueue`) and a downstream task
+(`run_live()` events → WebSocket) running concurrently via `asyncio.gather`.
+That's exactly what `server/app.py` does, with our own small JSON message
+contract instead of raw `Event` dumps (documented at the top of that file) so
+the browser only has to understand audio/transcript/score/dial/debrief
+messages. `witness_agent/agent.py` gained `make_agent_for_case(case_id)`, a
+factory that builds a fresh case-bound `Agent` + instruction provider + dial
+function per session, so the server can run either case file per connection
+while the M1 tests keep using the original module-level `root_agent` (still
+defaulted to Martinez) unchanged.
+
+**Sidebar UI (F9 partial):** `server/static/index.html` + `app.js` — plain
+HTML/vanilla JS (no framework, no build step), served by the same FastAPI app
+at `/`. Case picker, "Take the stand" button, a live pressure-dial slider
+(1-3, sends `{"type":"dial","level":n}` which becomes a `[STAGE DIRECTION]`
+content turn on the open `LiveRequestQueue` — the M1 mechanism, now with a
+UI), a rubric sidebar that ticks new score lines as they arrive with their
+`[D-xx]` citation, and a running AMTA-scale score total. Mic capture uses
+`ScriptProcessorNode` (deprecated but needs no separate worklet file — the
+pragmatic call for a timeboxed build) downsampled to 16kHz PCM16; playback
+queues 24kHz PCM16 chunks through `AudioBufferSourceNode`.
+
+**Debrief (F5):** `rubric_scorer/debrief.py` — one more `gemini-3.7-flash`
+call, over the full transcript plus every scored rubric event from the
+session, producing an AMTA 1-10 score, the two most important moments as
+transcript excerpts (each citing a `[D-xx]` reused from what was actually
+scored, never invented), and one concrete practice-focus recommendation.
+Copy tone is enforced in the system prompt: terse, courtroom-sober, no
+gamified language. Fires when the WebSocket session ends (`end_session`
+message or disconnect) and is pushed to the browser as a `{"type":"debrief"}`
+message, rendered as a simple full-screen panel.
+
+**Test results (T-01…T-06 from `expert_dossier.md`):** run with
+`python tests/test_rubric_scorer.py` (scripted text transcripts, no audio,
+real `gemini-3.7-flash` calls). All 6 pass, but two are honestly partial:
+- T-01 and T-05 in the dossier assume things `RubricScorer` doesn't model —
+  a direct-vs-cross distinction (T-01) and cross-exchange memory of a missed
+  objection (T-05), since the scorer is stateless per single Q/A exchange.
+  The tests verify the applicable half of each (leading-question recognition
+  for T-01, hearsay-objection recognition for T-05) and say so explicitly in
+  their output rather than claiming a clean pass.
+- T-02, T-03, T-04 map directly and pass cleanly.
+- T-06 (AMTA score display) tests `DebriefAgent`, not `RubricScorer` — it's a
+  session-close concern, not a per-turn one.
+
+## Try it locally
+
+```bash
+cd product
+source .venv/bin/activate
+export SSL_CERT_FILE=$(python3 -m certifi)
+uvicorn server.app:app --reload
+```
+
+Open `http://localhost:8000`, pick a case file, click "Take the stand.",
+allow microphone access. The dial slider is live once a session starts; the
+sidebar ticks as the rubric scorer catches up (2-3s behind audio is
+expected). Click "Session beenden" to end and see the debrief.
+
+`adk web` (see Run, above) still works standalone for the M0/M1 witness
+agent alone — it just has no dial UI or sidebar, which is what this server
+adds.
+
 ## Status
 
-M1: three escalation levels driven by session state, a character-fidelity
-guardrail, and a working (if not-yet-UI'd) pressure dial mechanism. Still
-no rubric scoring, debrief, or deploy — see the project brief for the full
-roadmap (M2–M3).
+M2: second case file with an impeachment hook, a live rubric-scoring sidebar
+backed by a real (if per-exchange-stateless) critic model, a pressure-dial UI
+driving the M1 stage-direction mechanism, and a courtroom-toned debrief — all
+served from The Stand's own FastAPI app, not `adk web`. Still no `adk eval`
+suite, Cloud Run deploy, Firestore persistence, or full UI-shell polish — see
+the project brief for the remaining roadmap (M3).

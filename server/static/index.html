@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>The Stand</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: #0b0c0e; color: #e8e6e1;
+    font-family: 'Georgia', 'Times New Roman', serif;
+    height: 100vh; display: flex; flex-direction: column;
+  }
+  header {
+    padding: 14px 24px; border-bottom: 1px solid #232426;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  header h1 { font-size: 17px; font-weight: 400; letter-spacing: 0.03em; margin: 0; }
+  header .disclaimer { font-size: 11px; color: #7c7a75; font-style: italic; }
+  main { flex: 1; display: flex; min-height: 0; }
+  .room { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 24px; padding: 24px; }
+  .sidebar {
+    width: 340px; border-left: 1px solid #232426; padding: 16px;
+    overflow-y: auto; display: flex; flex-direction: column; gap: 10px;
+    font-family: -apple-system, sans-serif; font-size: 13px;
+  }
+  .sidebar h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: #8a8880; margin: 0 0 4px; }
+  .score-line { padding: 8px 10px; border-radius: 3px; border-left: 3px solid #444; background: #131416; }
+  .score-line.triggered { border-left-color: #4a9d6e; }
+  .score-line.violation { border-left-color: #b04a4a; }
+  .score-line .note { display: block; margin-bottom: 3px; }
+  .score-line .cite { color: #8a8880; font-size: 11px; }
+  .score-total { font-size: 24px; font-family: -apple-system, sans-serif; }
+  select, button { font-family: inherit; background: #17181a; color: #e8e6e1; border: 1px solid #333; padding: 8px 12px; border-radius: 3px; }
+  button { cursor: pointer; }
+  button:hover { border-color: #666; }
+  #startBtn { font-size: 15px; padding: 12px 28px; }
+  .dial { display: flex; align-items: center; gap: 10px; }
+  .dial input[type=range] { width: 220px; }
+  .transcript { max-width: 640px; text-align: center; min-height: 3em; color: #c9c7c0; }
+  .transcript .examiner { color: #9db4c0; }
+  .transcript .witness { color: #e8e6e1; }
+  .case-picker { display: flex; gap: 10px; align-items: center; }
+  .status { font-size: 12px; color: #8a8880; font-family: -apple-system, sans-serif; }
+  #debrief { display: none; max-width: 520px; text-align: center; }
+  #debrief h2 { font-weight: 400; }
+  #debrief .moment { text-align: left; background: #131416; padding: 10px 12px; border-radius: 3px; margin: 8px 0; font-size: 13px; }
+  #debrief .score { font-size: 40px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>The Stand</h1>
+  <span class="disclaimer" id="disclaimer">The Stand trains technique. It does not give legal advice.</span>
+</header>
+<main>
+  <div class="room" id="roomView">
+    <div class="case-picker" id="casePicker"></div>
+    <button id="startBtn">Take the stand.</button>
+    <div class="dial" id="dialControl" style="display:none">
+      <span class="status">Cooperative</span>
+      <input type="range" min="1" max="3" value="1" id="dialSlider">
+      <span class="status">Hostile</span>
+    </div>
+    <div class="transcript" id="transcriptView"></div>
+    <button id="endBtn" style="display:none">Session beenden</button>
+    <div id="debrief"></div>
+  </div>
+  <aside class="sidebar">
+    <h2>Rubric</h2>
+    <div class="score-total">Score: <span id="scoreTotal">0</span></div>
+    <div id="scoreLines"></div>
+  </aside>
+</main>
+<script src="/static/app.js"></script>
+</body>
+</html>

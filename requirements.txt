@@ -1,3 +1,5 @@
 google-adk==2.8.0
 pyyaml>=6.0
 python-dotenv>=1.0
+fastapi>=0.115
+uvicorn[standard]>=0.32

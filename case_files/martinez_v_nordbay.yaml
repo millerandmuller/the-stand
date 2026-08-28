@@ -37,9 +37,26 @@ witness:
 rubric:
   - criterion: "Uses short, single-fact leading questions (no compound or open-ended questions)."
     source: "FRE 611(c)"
+    dxx: "D-01"
   - criterion: "Controls the witness — follows up when the witness evades instead of moving on."
     source: "Pozner & Dodd"
+    dxx: "D-14"
   - criterion: "Builds toward one clear impeachment point instead of scattering across topics."
     source: "Pozner & Dodd"
+    dxx: "D-15"
   - criterion: "Maintains a controlled, professional demeanor even as the witness escalates."
     source: "AMTA Ballot"
+    dxx: "D-09"
+  - criterion: "Flags a hearsay answer offered for the truth of the matter and calls for an objection."
+    source: "FRE 802"
+    dxx: "D-04"
+  - criterion: "Impeaches with the specific inconsistent fact and gives the witness a chance to explain or deny before pressing further."
+    source: "FRE 613(b)"
+    dxx: "D-06"
+
+# Impeachment hook (F2 acceptance note): the affidavit fixes a specific,
+# checkable detail a sharp examiner can catch Dale contradicting once
+# confronted with the loading dock's own timestamped inspection log.
+impeachment_fact:
+  affidavit_claim: "Inspected every pallet per protocol before it left the warehouse the night of March 14th."
+  contradicting_document: "Loading dock inspection log shows no scan entry for pallet #4471-B between 9:00 PM and end of shift — the only pallet on the manifest with a gap."
