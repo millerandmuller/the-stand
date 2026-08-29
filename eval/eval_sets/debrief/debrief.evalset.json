@@ -1,0 +1,41 @@
+{
+  "eval_set_id": "debrief_session_close",
+  "name": "DebriefAgent session-close quality (T-06)",
+  "description": "One scripted session close, replayed through debrief_judge_agent (DebriefAgent's eval double). Checks the AMTA-scale copy tone and citation discipline the brief requires for F5.",
+  "eval_cases": [
+    {
+      "eval_id": "T-06_amta_debrief",
+      "conversation": [
+        {
+          "invocation_id": "t06-1",
+          "user_content": {
+            "role": "user",
+            "parts": [
+              {
+                "text": "Transcript:\nExaminer: You inspected the pallet before it left the dock that night, didn't you?\nWitness: Yes, I inspected it per protocol.\nExaminer: The loading dock log shows no scan entry for pallet 4471-B between 9 PM and end of shift — can you explain that gap?\nWitness: I don't have an explanation for that gap right now.\n\nScored rubric events during the session:\n[{\"criterion\": \"Uses short, single-fact leading questions.\", \"dxx\": \"D-01\", \"triggered\": true, \"violation\": false, \"note\": \"Single-fact leading question.\", \"score_delta\": 1}, {\"criterion\": \"Impeaches with the specific inconsistent fact and gives the witness a chance to explain or deny before pressing further.\", \"dxx\": \"D-06\", \"triggered\": true, \"violation\": false, \"note\": \"Confronts with the document gap, offers explain-or-deny.\", \"score_delta\": 1}]"
+              }
+            ]
+          },
+          "final_response": {
+            "role": "model",
+            "parts": [
+              {
+                "text": "{\"amta_score\": 7, \"headline\": \"Session closed. Two clean leading questions, one landed impeachment.\", \"moments\": [{\"excerpt\": \"can you explain that gap?\", \"why_it_matters\": \"Specific document confrontation, properly sequenced.\", \"dxx\": \"D-06\"}, {\"excerpt\": \"You inspected the pallet before it left the dock, didn't you?\", \"why_it_matters\": \"Single-fact leading question, textbook cross form.\", \"dxx\": \"D-01\"}], \"practice_focus\": \"Press harder after the witness fails to explain the gap instead of moving on.\"}"
+              }
+            ]
+          },
+          "intermediate_data": {"tool_uses": [], "intermediate_responses": []}
+        }
+      ],
+      "rubrics": [
+        {
+          "rubric_id": "amta_score_in_range_and_citations_reused",
+          "rubric_content": {
+            "text_property": "The JSON response has an integer amta_score between 1 and 10, exactly two moments, each moment's dxx is one of D-01 or D-06 (reused from the scored events, never invented), and the headline/practice_focus are terse and courtroom-sober with no exclamation points or gamified language like 'great job' or 'level up'."
+          },
+          "type": "FINAL_RESPONSE_QUALITY"
+        }
+      ]
+    }
+  ]
+}

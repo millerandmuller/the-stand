@@ -211,11 +211,148 @@ expected). Click "Session beenden" to end and see the debrief.
 agent alone — it just has no dial UI or sidebar, which is what this server
 adds.
 
+## Eval suite (M3, F6)
+
+`eval/run_eval.py` is the CI-shaped entry point the brief asks for — a
+runnable command that prints pass/fail per criterion.
+
+**Why this isn't `adk eval` against WitnessAgent directly:** checked
+adk-docs (`evaluate/index.md`) before writing anything here. Every path ADK
+offers — web UI, `pytest`, and the `adk eval` CLI — drives an agent through
+`AgentEvaluator`, which runs turn-based `run_async` sessions. There is no
+session-replay path for a bidi Live connection in ADK 2.8.0's evaluation
+framework, so WitnessAgent (Live/bidi, `run_live`) genuinely cannot be
+evaluated this way. RubricScorer and DebriefAgent also aren't ADK `Agent`s
+in the first place — they call `google.genai` directly (see
+`rubric_scorer/scorer.py`, `rubric_scorer/debrief.py`), so `AgentEvaluator`
+has nothing to invoke for them either.
+
+The honest scoped equivalent: `eval/rubric_judge_agent/` and
+`eval/debrief_judge_agent/` are turn-based ADK `Agent` **doubles** that
+reuse (import, not copy) RubricScorer's and DebriefAgent's exact system
+prompts, so the real judging logic runs through the real `AgentEvaluator`
+pipeline instead of a bespoke harness pretending to be one. They're graded
+with ADK's `rubric_based_final_response_quality_v1` and
+`rubric_based_multi_turn_trajectory_quality_v1` criteria (LLM-as-judge,
+`gemini-3.7-flash`, per-case rubrics) — a genuine stock-ADK fit, since these
+criteria don't require tool calls or exact-match reference responses, just
+a judge checking specific properties of a text response. Each eval set lives
+in its own subdirectory under `eval/eval_sets/` because `AgentEvaluator`
+auto-discovers a sibling `test_config.json` per directory
+(`AgentEvaluator.find_config_for_test_file`), not per file.
+
+Three eval sets:
+- `eval_sets/rubric_scorer/` — T-01..T-05 scripted deterministic exchanges
+  from `expert_dossier.md`, each case's rubric checking the correct `D-xx`
+  citation with the correct triggered/violation polarity.
+- `eval_sets/novice_trajectory/` — the scoped-down stand-in for a
+  TTS-User-Simulator: a full audio simulator was out of scope for this
+  milestone, so this is a hand-authored 4-turn NOVICE-examiner-persona text
+  trajectory (open question → compound question → well-formed impeachment
+  question → weak open follow-up that loses the thread), graded on the
+  judge's behavior across the WHOLE session via
+  `rubric_based_multi_turn_trajectory_quality_v1`.
+- `eval_sets/debrief/` — T-06, DebriefAgent's session-close output (AMTA
+  score range, citation reuse, courtroom-sober tone).
+
+`run_eval.py` also runs `RubricTrajectoryJudge`
+(`rubric_scorer/trajectory_judge.py`) **directly** — a new session-level
+`gemini-3.7-flash` judge, extending RubricScorer's per-exchange logic to a
+full-transcript replay, independent of the `AgentEvaluator` wrapper — against
+the same novice trajectory, and checks it never invents a `dxx` citation
+outside the case's rubric.
+
+Run it:
+
+```bash
+pip install "google-adk[eval]==2.8.0"  # already in requirements.txt
+python eval/run_eval.py
+```
+
+**Real output from the last run** (all real `gemini-3.7-flash` calls, no
+mocking):
+
+```
+=== EVAL SUITE SUMMARY ===
+PASS: rubric_judge_agent vs rubric_scorer.evalset.json (T-01..T-05)
+  all criteria met threshold
+PASS: rubric_judge_agent vs novice_trajectory.evalset.json (simulated NOVICE)
+  all criteria met threshold
+PASS: debrief_judge_agent vs debrief.evalset.json (T-06)
+  all criteria met threshold
+PASS: RubricTrajectoryJudge direct run (no invented citations)
+  no invented dxx ids
+
+OVERALL: PASS
+```
+
+## Deploy (M3, F8)
+
+Deployed to Cloud Run in the `the-stand-2026` GCP project, region
+`europe-west1`, from the FastAPI app in `server/app.py` (not `adk deploy
+cloud_run` / `adk web` — the real product is the custom WebSocket server, so
+a plain `Dockerfile` + `gcloud run deploy` per adk-docs' documented "gcloud
+CLI for Python" path, not the ADK dev-UI deployment).
+
+**Timeout/memory traps** (per `stack_briefing.md`, both explicit, neither
+left at default): Cloud Run's default request timeout (300s) is far too
+short for a multi-minute voice cross-examination session, and the default
+memory (512Mi) OOMs loading the ADK/Gemini/Firestore stack.
+
+```bash
+gcloud run deploy the-stand \
+  --source . \
+  --project=the-stand-2026 \
+  --region=europe-west1 \
+  --allow-unauthenticated \
+  --timeout=3600 \
+  --memory=1Gi \
+  --set-env-vars="GOOGLE_CLOUD_PROJECT=the-stand-2026,GOOGLE_GENAI_USE_ENTERPRISE=FALSE" \
+  --set-secrets="GOOGLE_API_KEY=GOOGLE_API_KEY:latest"
+```
+
+The API key is a Secret Manager secret (`GOOGLE_API_KEY`, project
+`the-stand-2026`), not a plain env var — Secret Manager wasn't in the
+original H.T stack-contract API list, but enabling it took one
+`gcloud services enable secretmanager.googleapis.com` call (a few seconds),
+so the brief's "prefer Secret Manager unless meaningfully more friction"
+call resolved in favor of Secret Manager. The compute default service
+account was granted `roles/secretmanager.secretAccessor` (read the secret)
+and `roles/datastore.user` (Firestore session persistence, see below).
+
+**Firestore session persistence:** ADK 2.8.0's Python package has no native
+Firestore session service — the `FirestoreSessionService` documented on
+adk-docs is Java-only (checked `integrations/firestore-session-service`,
+explicitly `Supported in ADK Java`; `google.adk.sessions` in the installed
+Python package only ships `InMemorySessionService`, `DatabaseSessionService`
+and `VertexAiSessionService`). Per the brief's own fallback, `server/
+firestore_store.py` is a direct `google-cloud-firestore` client wrapping the
+session state that actually matters for the product — case selection,
+transcript, scored rubric events, and the debrief — one document per session
+in the `the_stand_sessions` collection, written incrementally from
+`server/app.py`'s WebSocket handler. ADK's own `InMemorySessionService`
+still runs the Runner's internal session bookkeeping (rewriting that as a
+custom `BaseSessionService` wasn't worth it for this milestone). Writes are
+best-effort and never raise into the live session, the same tolerance
+pattern the RubricScorer already used for its own failures. A Firestore
+Native database had to be created first (`gcloud firestore databases
+create --location=europe-west1 --type=firestore-native`) — the project had
+Firestore's API enabled but no database provisioned yet.
+
+Live URL: **https://the-stand-596357648145.europe-west1.run.app**
+
+```
+$ curl -s -o /dev/null -w "%{http_code}\n" https://the-stand-596357648145.europe-west1.run.app/
+200
+$ curl -s https://the-stand-596357648145.europe-west1.run.app/api/cases
+{"cases":[{"case_id":"martinez_v_nordbay", ...}, {"case_id":"chen_v_summit_biotech", ...}],
+ "disclaimer":"The Stand trains technique. It does not give legal advice."}
+```
+
 ## Status
 
-M2: second case file with an impeachment hook, a live rubric-scoring sidebar
-backed by a real (if per-exchange-stateless) critic model, a pressure-dial UI
-driving the M1 stage-direction mechanism, and a courtroom-toned debrief — all
-served from The Stand's own FastAPI app, not `adk web`. Still no `adk eval`
-suite, Cloud Run deploy, Firestore persistence, or full UI-shell polish — see
-the project brief for the remaining roadmap (M3).
+M3: `adk eval`-shaped eval suite (`eval/run_eval.py`, real `gemini-3.7-flash`
+judging, no mocked results) and a real Cloud Run deploy with Firestore
+session persistence. Still no full UI-shell polish, multi-language witness,
+or profession-module config swap — see the project brief for the remaining
+roadmap.

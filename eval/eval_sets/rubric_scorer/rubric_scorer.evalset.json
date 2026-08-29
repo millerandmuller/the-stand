@@ -1,0 +1,177 @@
+{
+  "eval_set_id": "rubric_scorer_scripted_exchanges",
+  "name": "RubricScorer scripted exchanges (T-01..T-05)",
+  "description": "Scripted deterministic examiner/witness exchanges from expert_dossier.md, replayed against rubric_judge_agent (RubricScorer's eval double). Each case's rubric checks that the correct D-xx id was cited with the correct triggered/violation polarity.",
+  "eval_cases": [
+    {
+      "eval_id": "T-01_leading_question_cross",
+      "conversation": [
+        {
+          "invocation_id": "t01-1",
+          "user_content": {
+            "role": "user",
+            "parts": [
+              {
+                "text": "Examiner: \"You inspected the pallet before it left the dock that night, didn't you?\"\nWitness (Dale Petrov): \"Yes, I inspected it per protocol.\""
+              }
+            ]
+          },
+          "final_response": {
+            "role": "model",
+            "parts": [
+              {
+                "text": "{\"events\": [{\"criterion\": \"Uses short, single-fact leading questions (no compound or open-ended questions).\", \"dxx\": \"D-01\", \"triggered\": true, \"violation\": false, \"note\": \"Single-fact leading question, properly formed for cross.\", \"score_delta\": 1}]}"
+              }
+            ]
+          },
+          "intermediate_data": {"tool_uses": [], "intermediate_responses": []}
+        }
+      ],
+      "rubrics": [
+        {
+          "rubric_id": "recognizes_leading_question_as_triggered",
+          "rubric_content": {
+            "text_property": "The JSON response's events array includes at least one item with dxx \"D-01\" and triggered true — the single-fact leading question is recognized as correct cross-examination technique, not as a violation."
+          },
+          "type": "FINAL_RESPONSE_QUALITY"
+        }
+      ]
+    },
+    {
+      "eval_id": "T-02_open_w_question_loses_control",
+      "conversation": [
+        {
+          "invocation_id": "t02-1",
+          "user_content": {
+            "role": "user",
+            "parts": [
+              {
+                "text": "Examiner: \"Why did you leave the loading dock early that night?\"\nWitness (Dale Petrov): \"I had a lot on my mind, there were other things going on, it wasn't just about the dock.\""
+              }
+            ]
+          },
+          "final_response": {
+            "role": "model",
+            "parts": [
+              {
+                "text": "{\"events\": [{\"criterion\": \"Uses short, single-fact leading questions (no compound or open-ended questions).\", \"dxx\": \"D-01\", \"triggered\": false, \"violation\": true, \"note\": \"Open why-question hands the witness the floor and control is lost.\", \"score_delta\": -1}]}"
+              }
+            ]
+          },
+          "intermediate_data": {"tool_uses": [], "intermediate_responses": []}
+        }
+      ],
+      "rubrics": [
+        {
+          "rubric_id": "flags_open_question_as_violation",
+          "rubric_content": {
+            "text_property": "The JSON response's events array includes at least one item with dxx \"D-01\" and violation true — the open \"why\" question is recognized as a rules violation (not a leading question, not a triggered/positive technique)."
+          },
+          "type": "FINAL_RESPONSE_QUALITY"
+        }
+      ]
+    },
+    {
+      "eval_id": "T-03_compound_question",
+      "conversation": [
+        {
+          "invocation_id": "t03-1",
+          "user_content": {
+            "role": "user",
+            "parts": [
+              {
+                "text": "Examiner: \"You saw the pallet arrive, checked the manifest, and then signed off without opening it, correct?\"\nWitness (Dale Petrov): \"I mean, that's roughly what happened, yes.\""
+              }
+            ]
+          },
+          "final_response": {
+            "role": "model",
+            "parts": [
+              {
+                "text": "{\"events\": [{\"criterion\": \"Uses short, single-fact leading questions (no compound or open-ended questions).\", \"dxx\": \"D-01\", \"triggered\": false, \"violation\": true, \"note\": \"Three separate facts stacked into one compound question.\", \"score_delta\": -1}]}"
+              }
+            ]
+          },
+          "intermediate_data": {"tool_uses": [], "intermediate_responses": []}
+        }
+      ],
+      "rubrics": [
+        {
+          "rubric_id": "flags_compound_question_as_violation",
+          "rubric_content": {
+            "text_property": "The JSON response's events array includes at least one item with violation true — the compound question stacking three separate facts (arrival, manifest check, sign-off) into one question is recognized as a technique violation."
+          },
+          "type": "FINAL_RESPONSE_QUALITY"
+        }
+      ]
+    },
+    {
+      "eval_id": "T-04_impeachment_sequence",
+      "conversation": [
+        {
+          "invocation_id": "t04-1",
+          "user_content": {
+            "role": "user",
+            "parts": [
+              {
+                "text": "Examiner: \"The loading dock log shows no scan entry for pallet 4471-B between 9 PM and end of shift — can you explain that gap, or do you deny the log is accurate?\"\nWitness (Dale Petrov): \"I... I don't have an explanation for that gap right now.\""
+              }
+            ]
+          },
+          "final_response": {
+            "role": "model",
+            "parts": [
+              {
+                "text": "{\"events\": [{\"criterion\": \"Impeaches with the specific inconsistent fact and gives the witness a chance to explain or deny before pressing further.\", \"dxx\": \"D-06\", \"triggered\": true, \"violation\": false, \"note\": \"Confronts with the specific document gap and offers explain-or-deny.\", \"score_delta\": 1}]}"
+              }
+            ]
+          },
+          "intermediate_data": {"tool_uses": [], "intermediate_responses": []}
+        }
+      ],
+      "rubrics": [
+        {
+          "rubric_id": "recognizes_impeachment_sequence",
+          "rubric_content": {
+            "text_property": "The JSON response's events array includes at least one item with dxx \"D-06\" and triggered true — confronting the witness with the specific dock-log gap and inviting an explanation-or-denial is recognized as the correct impeachment sequence."
+          },
+          "type": "FINAL_RESPONSE_QUALITY"
+        }
+      ]
+    },
+    {
+      "eval_id": "T-05_hearsay_objection_recognized",
+      "conversation": [
+        {
+          "invocation_id": "t05-1",
+          "user_content": {
+            "role": "user",
+            "parts": [
+              {
+                "text": "Examiner: \"Objection — hearsay. That statement is being offered for the truth of what Maria said.\"\nWitness (Dale Petrov): \"(Witness pauses, no further testimony on that point.)\""
+              }
+            ]
+          },
+          "final_response": {
+            "role": "model",
+            "parts": [
+              {
+                "text": "{\"events\": [{\"criterion\": \"Flags a hearsay answer offered for the truth of the matter and calls for an objection.\", \"dxx\": \"D-04\", \"triggered\": true, \"violation\": false, \"note\": \"Correctly raises a hearsay objection.\", \"score_delta\": 1}]}"
+              }
+            ]
+          },
+          "intermediate_data": {"tool_uses": [], "intermediate_responses": []}
+        }
+      ],
+      "rubrics": [
+        {
+          "rubric_id": "recognizes_hearsay_objection",
+          "rubric_content": {
+            "text_property": "The JSON response's events array includes at least one item with dxx \"D-04\" and triggered true — the hearsay objection is recognized as correctly raised."
+          },
+          "type": "FINAL_RESPONSE_QUALITY"
+        }
+      ]
+    }
+  ]
+}

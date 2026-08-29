@@ -1,0 +1,19 @@
+{
+  "criteria": {
+    "rubric_based_final_response_quality_v1": {
+      "threshold": 1.0,
+      "judge_model_options": {
+        "judge_model": "gemini-3.7-flash",
+        "num_samples": 3
+      },
+      "rubrics": [
+        {
+          "rubric_id": "valid_json_no_invented_dxx",
+          "rubric_content": {
+            "text_property": "The response is a single JSON object with an 'events' array (optionally wrapped in a fenced code block), and every 'dxx' value in it is one of exactly: D-01, D-14, D-15, D-09, D-04, D-06 — never a citation invented outside this list."
+          }
+        }
+      ]
+    }
+  }
+}

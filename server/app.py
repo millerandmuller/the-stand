@@ -44,6 +44,7 @@ from google.genai import types
 
 from rubric_scorer.debrief import DebriefAgent
 from rubric_scorer.scorer import RubricScorer
+from server.firestore_store import SessionStore
 from witness_agent.agent import DISCLAIMER, load_case, make_agent_for_case
 
 APP_NAME = "the_stand"
@@ -53,6 +54,7 @@ app = FastAPI()
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 session_service = InMemorySessionService()
+firestore_store = SessionStore()
 
 
 @app.get("/")
@@ -109,6 +111,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str) -> None:
         session_id=session_id,
         state={"pressure_level": pressure_level},
     )
+    await firestore_store.start_session(session_id, case_id, pressure_level)
     runner = Runner(app_name=APP_NAME, agent=agent, session_service=session_service)
 
     run_config = RunConfig(
@@ -153,6 +156,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str) -> None:
         ]
         scored_events.extend(events_payload)
         await websocket.send_text(json.dumps({"type": "score", "events": events_payload}))
+        await firestore_store.append_score_events(session_id, events_payload)
 
     async def upstream_task() -> None:
         nonlocal pending_examiner_text
@@ -215,8 +219,12 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str) -> None:
                         )
 
             if event.turn_complete and current_witness_text:
-                transcript_lines.append(f"Examiner: {pending_examiner_text}")
-                transcript_lines.append(f"Witness: {current_witness_text}")
+                new_lines = [
+                    f"Examiner: {pending_examiner_text}",
+                    f"Witness: {current_witness_text}",
+                ]
+                transcript_lines.extend(new_lines)
+                asyncio.create_task(firestore_store.append_transcript(session_id, new_lines))
                 asyncio.create_task(
                     score_and_emit(pending_examiner_text, current_witness_text)
                 )
@@ -232,23 +240,20 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str) -> None:
         try:
             transcript = "\n".join(transcript_lines) or "(no exchanges recorded)"
             debrief = await debrief_agent.build(transcript, scored_events)
-            await websocket.send_text(
-                json.dumps(
+            debrief_payload = {
+                "amta_score": debrief.amta_score,
+                "headline": debrief.headline,
+                "moments": [
                     {
-                        "type": "debrief",
-                        "amta_score": debrief.amta_score,
-                        "headline": debrief.headline,
-                        "moments": [
-                            {
-                                "excerpt": m.excerpt,
-                                "why_it_matters": m.why_it_matters,
-                                "dxx": m.dxx,
-                            }
-                            for m in debrief.moments
-                        ],
-                        "practice_focus": debrief.practice_focus,
+                        "excerpt": m.excerpt,
+                        "why_it_matters": m.why_it_matters,
+                        "dxx": m.dxx,
                     }
-                )
-            )
+                    for m in debrief.moments
+                ],
+                "practice_focus": debrief.practice_focus,
+            }
+            await websocket.send_text(json.dumps({"type": "debrief", **debrief_payload}))
+            await firestore_store.save_debrief(session_id, debrief_payload)
         except Exception:
             pass

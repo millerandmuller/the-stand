@@ -1,0 +1,108 @@
+{
+  "eval_set_id": "novice_examiner_trajectory",
+  "name": "Simulated NOVICE examiner trajectory",
+  "description": "Scoped-down stand-in for a TTS-User-Simulator (brief F6): a text persona simulating a clumsy novice examiner across a 4-turn session against Dale Petrov (martinez_v_nordbay) — open question, then a compound question, then a well-formed leading impeachment question, then a weak open follow-up that loses the thread. Replayed through rubric_judge_agent turn by turn; the case-level rubric checks the judge's behavior across the WHOLE session via rubric_based_multi_turn_trajectory_quality_v1, not any single turn.",
+  "eval_cases": [
+    {
+      "eval_id": "novice_session_01",
+      "conversation": [
+        {
+          "invocation_id": "novice-1",
+          "user_content": {
+            "role": "user",
+            "parts": [
+              {
+                "text": "Examiner: \"Can you just tell me what happened that night?\"\nWitness (Dale Petrov): \"Sure — I supervised the loading dock as usual, inspected every pallet per protocol before it left. Nothing out of the ordinary that I recall.\""
+              }
+            ]
+          },
+          "final_response": {
+            "role": "model",
+            "parts": [
+              {
+                "text": "{\"events\": [{\"criterion\": \"Uses short, single-fact leading questions (no compound or open-ended questions).\", \"dxx\": \"D-01\", \"triggered\": false, \"violation\": true, \"note\": \"Wide-open invitation hands the narrative to the witness.\", \"score_delta\": -1}]}"
+              }
+            ]
+          },
+          "intermediate_data": {"tool_uses": [], "intermediate_responses": []}
+        },
+        {
+          "invocation_id": "novice-2",
+          "user_content": {
+            "role": "user",
+            "parts": [
+              {
+                "text": "Examiner: \"You saw the pallet arrive, checked the manifest, and then signed off without opening it, correct?\"\nWitness (Dale Petrov): \"I mean, that's roughly what happened, yes.\""
+              }
+            ]
+          },
+          "final_response": {
+            "role": "model",
+            "parts": [
+              {
+                "text": "{\"events\": [{\"criterion\": \"Uses short, single-fact leading questions (no compound or open-ended questions).\", \"dxx\": \"D-01\", \"triggered\": false, \"violation\": true, \"note\": \"Three facts stacked into one compound question.\", \"score_delta\": -1}]}"
+              }
+            ]
+          },
+          "intermediate_data": {"tool_uses": [], "intermediate_responses": []}
+        },
+        {
+          "invocation_id": "novice-3",
+          "user_content": {
+            "role": "user",
+            "parts": [
+              {
+                "text": "Examiner: \"The loading dock log shows no scan entry for pallet 4471-B between 9 PM and end of shift — isn't that right?\"\nWitness (Dale Petrov): \"I... I don't have an explanation for that gap right now.\""
+              }
+            ]
+          },
+          "final_response": {
+            "role": "model",
+            "parts": [
+              {
+                "text": "{\"events\": [{\"criterion\": \"Impeaches with the specific inconsistent fact and gives the witness a chance to explain or deny before pressing further.\", \"dxx\": \"D-06\", \"triggered\": true, \"violation\": false, \"note\": \"Confronts with the specific document gap, single fact, properly leading.\", \"score_delta\": 1}]}"
+              }
+            ]
+          },
+          "intermediate_data": {"tool_uses": [], "intermediate_responses": []}
+        },
+        {
+          "invocation_id": "novice-4",
+          "user_content": {
+            "role": "user",
+            "parts": [
+              {
+                "text": "Examiner: \"Why not?\"\nWitness (Dale Petrov): \"It's possible, but I'd have to check — a lot was happening on the floor that night, and honestly, why does that one gap matter more than the rest of the log?\""
+              }
+            ]
+          },
+          "final_response": {
+            "role": "model",
+            "parts": [
+              {
+                "text": "{\"events\": [{\"criterion\": \"Controls the witness — follows up when the witness evades instead of moving on.\", \"dxx\": \"D-14\", \"triggered\": false, \"violation\": true, \"note\": \"Open follow-up lets the witness deflect with a counter-question instead of being pinned to the gap.\", \"score_delta\": -1}]}"
+              }
+            ]
+          },
+          "intermediate_data": {"tool_uses": [], "intermediate_responses": []}
+        }
+      ],
+      "rubrics": [
+        {
+          "rubric_id": "recognizes_control_lost_after_the_impeachment_landed",
+          "rubric_content": {
+            "text_property": "Across the session, the judge recognizes that the examiner's best moment was the single-fact impeachment confrontation about the pallet 4471-B log gap (turn 3), and that the immediately following open \"Why not?\" follow-up (turn 4) let the witness regain control and evade — i.e. the judge does not treat turn 4 as good technique just because it followed a strong turn 3."
+          },
+          "type": "TRAJECTORY_QUALITY"
+        },
+        {
+          "rubric_id": "no_invented_dxx_across_session",
+          "rubric_content": {
+            "text_property": "Across every turn of the session, the judge only ever cites dxx ids from the set D-01, D-14, D-15, D-09, D-04, D-06 — it never invents a citation outside this list."
+          },
+          "type": "TRAJECTORY_QUALITY"
+        }
+      ]
+    }
+  ]
+}
