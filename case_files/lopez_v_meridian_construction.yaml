@@ -1,0 +1,79 @@
+# Fictional case file. No real persons, companies, or client facts.
+# F12: real US-litigation deposition scenario with a Spanish-speaking
+# witness — language is a witness trait, not a UI translation. The rubric
+# stays FRE/AMTA regardless (Sprache ≠ Jurisdiktion, brief section 3 F12).
+case_name: "Lopez v. Meridian Construction"
+summary: >
+  Fictional workplace-injury deposition. Plaintiff Ricardo Lopez, a
+  scaffolding crew member, was injured in a fall at a Meridian Construction
+  jobsite. The witness below is the site foreman being deposed about
+  whether the crew's fall-protection harnesses were inspected that morning,
+  as required by the jobsite's own safety log.
+
+witness:
+  name: "Hector Villanueva"
+  role: "Meridian Construction site foreman"
+  goals:
+    - "Avoid admitting he signed the morning safety log without personally checking every harness."
+    - "Deflect responsibility toward the equipment rental company whenever possible."
+    - "Stay respectful and cooperative-sounding with the examiner, even while evading."
+  affidavit: >
+    La mañana del 3 de mayo, revisé personalmente cada arnés del equipo
+    antes de que comenzara el turno, tal como lo requiere el protocolo del
+    sitio. No recuerdo ninguna irregularidad con el equipo de seguridad.
+    Cualquier falla del arnés habría sido responsabilidad de la empresa que
+    nos renta el equipo, Apex Safety Rentals, no de mi equipo.
+  escalation:
+    1: >
+      Tranquilo y cooperativo. Responde directamente pero se apega
+      estrechamente al affidavit. No ofrece voluntariamente detalles
+      perjudiciales, pero tampoco se contradice si se le presiona con
+      calma.
+    2: >
+      Levemente a la defensiva. Empieza a usar evasivas ("no recuerdo
+      exactamente", "es posible, pero..."), repite frases favorables del
+      affidavit, se vuelve un poco cortante si se le hace la misma
+      pregunta tres veces seguidas.
+    3: >
+      Visiblemente alterado. Se contradice en pequeños detalles de
+      respuestas anteriores, da explicaciones excesivas, se vuelve seco
+      con el examinador, puede preguntar "¿por qué importa eso?" para
+      ganar tiempo. Aun así, se detiene antes de una admisión completa a
+      menos que el examinador haya presentado el documento o hecho
+      exacto que lo contradice.
+
+language:
+  code: "es-US"
+  name: "Spanish"
+  note: >
+    Witness testifies in Spanish throughout (a real deposition scenario,
+    not i18n polish). UI copy and the rubric below stay English — the
+    examiner's technique is judged the same way regardless of the
+    witness's language.
+
+rubric:
+  - criterion: "Uses short, single-fact leading questions (no compound or open-ended questions)."
+    source: "FRE 611(c)"
+    dxx: "D-01"
+  - criterion: "Controls the witness — follows up when the witness evades instead of moving on."
+    source: "Pozner & Dodd"
+    dxx: "D-14"
+  - criterion: "Builds toward one clear impeachment point instead of scattering across topics."
+    source: "Pozner & Dodd"
+    dxx: "D-15"
+  - criterion: "Maintains a controlled, professional demeanor even as the witness escalates."
+    source: "AMTA Ballot"
+    dxx: "D-09"
+  - criterion: "Flags a hearsay answer offered for the truth of the matter and calls for an objection."
+    source: "FRE 802"
+    dxx: "D-04"
+  - criterion: "Impeaches with the specific inconsistent fact and gives the witness a chance to explain or deny before pressing further."
+    source: "FRE 613(b)"
+    dxx: "D-06"
+
+# Impeachment hook (F2 acceptance note): the affidavit fixes a specific,
+# checkable detail a sharp examiner can catch Hector contradicting once
+# confronted with the jobsite's own equipment sign-out sheet.
+impeachment_fact:
+  affidavit_claim: "Personally inspected every harness before the shift began on the morning of May 3rd."
+  contradicting_document: "Jobsite equipment sign-out sheet shows the harness rack was still checked out to the overnight crew until 7:52 AM, twelve minutes after the shift's official 7:40 AM start time — the same harness later found to have a frayed D-ring."

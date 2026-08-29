@@ -29,12 +29,14 @@ LIVE_MODEL = "gemini-3.1-flash-live-preview"
 LIVE_MODEL_FALLBACK = "gemini-2.5-flash-native-audio-preview-12-2025"
 
 CASE_DIR = Path(__file__).parent.parent / "case_files"
-CASE_FILE = CASE_DIR / "martinez_v_nordbay.yaml"
 DEFAULT_CASE_ID = "martinez_v_nordbay"
-CASE_FILES = {
-    "martinez_v_nordbay": CASE_DIR / "martinez_v_nordbay.yaml",
-    "chen_v_summit_biotech": CASE_DIR / "chen_v_summit_biotech.yaml",
-}
+# F7: profession-module swap is "drop a yaml in case_files/, nothing else" —
+# case discovery is a directory scan, not a hardcoded list, so a new
+# persona+rubric config (legal or otherwise, e.g. the sales-discovery demo
+# case) is picked up automatically by both this module and the server's
+# /api/cases endpoint.
+CASE_FILES = {p.stem: p for p in sorted(CASE_DIR.glob("*.yaml"))}
+CASE_FILE = CASE_FILES.get(DEFAULT_CASE_ID, CASE_DIR / "martinez_v_nordbay.yaml")
 DEFAULT_PRESSURE_LEVEL = 1
 
 DISCLAIMER = "The Stand trains technique. It does not give legal advice."
@@ -89,9 +91,34 @@ def _clamp_level(level) -> int:
     return min(max(level, 1), 3)
 
 
+def case_language_code(case: dict) -> Optional[str]:
+    """F12: BCP-47 code for this case's witness, or None for English default.
+
+    Read by the server to set RunConfig's SpeechConfig.language_code so the
+    Live model's audio output actually comes back in that language, not just
+    text described in the prompt.
+    """
+    return case.get("language", {}).get("code")
+
+
+def _language_section(case: dict) -> str:
+    language = case.get("language")
+    if not language:
+        return ""
+    return f"""
+# Language (F12 — Sprache ≠ Jurisdiktion)
+You testify in {language["name"]}, regardless of what language the examiner
+uses. Speak only {language["name"]} — do not translate, do not switch to
+English, do not narrate that you are speaking {language["name"]}. The
+rubric and courtroom rules the examiner is held to (FRE, AMTA) are the same
+ones as any other case; only the witness's spoken language differs.
+"""
+
+
 def _build_instruction(case: dict, escalation_level: int) -> str:
     witness = case["witness"]
     escalation_text = witness["escalation"][escalation_level]
+    language_section = _language_section(case)
     return f"""You are role-playing as a witness in a fictional legal training exercise.
 This is entirely fictional — case, parties, and facts are all invented for practice.
 Never break character to give real legal advice. If asked for legal advice, respond
@@ -135,7 +162,7 @@ by the examiner — it is an operator note adjusting your demeanor mid-session
 (the pressure dial). Silently adopt the demeanor it describes starting with
 your next answer. Never say the words "stage direction" out loud, never
 acknowledge receiving it, and never treat its contents as a question to answer.
-"""
+{language_section}"""
 
 
 _case = _load_case()

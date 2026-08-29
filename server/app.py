@@ -45,7 +45,12 @@ from google.genai import types
 from rubric_scorer.debrief import DebriefAgent
 from rubric_scorer.scorer import RubricScorer
 from server.firestore_store import SessionStore
-from witness_agent.agent import DISCLAIMER, load_case, make_agent_for_case
+from witness_agent.agent import (
+    DISCLAIMER,
+    case_language_code,
+    load_case,
+    make_agent_for_case,
+)
 
 APP_NAME = "the_stand"
 STATIC_DIR = Path(__file__).parent / "static"
@@ -114,9 +119,19 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str) -> None:
     await firestore_store.start_session(session_id, case_id, pressure_level)
     runner = Runner(app_name=APP_NAME, agent=agent, session_service=session_service)
 
+    # F12: a case can declare a witness language (BCP-47 code); wiring it
+    # into SpeechConfig makes the Live model's audio actually come back in
+    # that language instead of relying on the prompt alone. Omitted for the
+    # English-default cases (speech_config=None keeps default behavior).
+    language_code = case_language_code(case)
+    speech_config = (
+        types.SpeechConfig(language_code=language_code) if language_code else None
+    )
+
     run_config = RunConfig(
         streaming_mode=StreamingMode.BIDI,
         response_modalities=["AUDIO"],
+        speech_config=speech_config,
         input_audio_transcription=types.AudioTranscriptionConfig(),
         output_audio_transcription=types.AudioTranscriptionConfig(),
     )
