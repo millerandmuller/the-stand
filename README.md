@@ -205,7 +205,7 @@ uvicorn server.app:app --reload
 Open `http://localhost:8000`, pick a case file, click "Take the stand.",
 allow microphone access. The dial slider is live once a session starts; the
 sidebar ticks as the rubric scorer catches up (2-3s behind audio is
-expected). Click "Session beenden" to end and see the debrief.
+expected). Click "End session." to end and see the debrief.
 
 `adk web` (see Run, above) still works standalone for the M0/M1 witness
 agent alone — it just has no dial UI or sidebar, which is what this server

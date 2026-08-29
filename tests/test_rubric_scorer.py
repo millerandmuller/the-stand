@@ -161,4 +161,8 @@ for test_id, note, mapped, passed in results:
 
 all_passed = all(p for _, _, _, p in results)
 print("\nOVERALL:", "PASS" if all_passed else "FAIL (see per-test notes above)")
-sys.exit(0 if all_passed else 1)
+
+if __name__ == "__main__":
+    # Guarded so `pytest tests/` (which imports this module rather than
+    # running it as a script) doesn't treat a clean exit(0) as a crash.
+    sys.exit(0 if all_passed else 1)

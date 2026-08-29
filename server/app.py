@@ -47,6 +47,8 @@ from rubric_scorer.scorer import RubricScorer
 from server.firestore_store import SessionStore
 from witness_agent.agent import (
     DISCLAIMER,
+    MalformedCaseError,
+    UnknownCaseError,
     case_language_code,
     load_case,
     make_agent_for_case,
@@ -103,11 +105,19 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str) -> None:
         return
 
     case_id = first.get("case_id", "martinez_v_nordbay")
-    pressure_level = int(first.get("pressure_level", 1))
+    try:
+        pressure_level = int(first.get("pressure_level", 1))
+    except (TypeError, ValueError):
+        pressure_level = 1
+    pressure_level = min(max(pressure_level, 1), 3)
     user_id = "operator"
 
-    case, agent, stage_direction_for_level = make_agent_for_case(case_id)
-    scorer = RubricScorer(case)
+    try:
+        case, agent, stage_direction_for_level = make_agent_for_case(case_id)
+        scorer = RubricScorer(case)
+    except (UnknownCaseError, MalformedCaseError) as exc:
+        await websocket.send_text(json.dumps({"type": "error", "message": str(exc)}))
+        return
     debrief_agent = DebriefAgent()
 
     await session_service.create_session(
@@ -178,21 +188,35 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str) -> None:
         try:
             while True:
                 raw = await websocket.receive_text()
-                msg = json.loads(raw)
-                mtype = msg.get("type")
-                if mtype == "audio":
-                    audio_bytes = base64.b64decode(msg["data"])
-                    live_request_queue.send_realtime(
-                        types.Blob(mime_type="audio/pcm;rate=16000", data=audio_bytes)
+                try:
+                    msg = json.loads(raw)
+                    mtype = msg.get("type")
+                    if mtype == "audio":
+                        data = msg.get("data")
+                        if not data:
+                            continue
+                        audio_bytes = base64.b64decode(data)
+                        live_request_queue.send_realtime(
+                            types.Blob(mime_type="audio/pcm;rate=16000", data=audio_bytes)
+                        )
+                    elif mtype == "dial":
+                        try:
+                            level = int(msg.get("level", 1))
+                        except (TypeError, ValueError):
+                            level = 1
+                        direction = stage_direction_for_level(level)
+                        live_request_queue.send_content(
+                            types.Content(role="user", parts=[types.Part(text=direction)])
+                        )
+                    elif mtype == "end_session":
+                        break
+                except (json.JSONDecodeError, ValueError, TypeError) as exc:
+                    # A malformed frame (missing field, bad base64, non-numeric
+                    # level) must never kill the live session — report it and
+                    # keep listening for the next frame instead.
+                    await websocket.send_text(
+                        json.dumps({"type": "error", "message": f"bad message: {exc}"})
                     )
-                elif mtype == "dial":
-                    level = int(msg.get("level", 1))
-                    direction = stage_direction_for_level(level)
-                    live_request_queue.send_content(
-                        types.Content(role="user", parts=[types.Part(text=direction)])
-                    )
-                elif mtype == "end_session":
-                    break
         except (WebSocketDisconnect, RuntimeError):
             pass
         finally:

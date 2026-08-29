@@ -41,14 +41,15 @@ DEFAULT_PRESSURE_LEVEL = 1
 
 DISCLAIMER = "The Stand trains technique. It does not give legal advice."
 
-# Deterministic character-fidelity backstop. The instruction already tells the model
-# to stay in character, but adversarial probes (prompt injection, "ignore your
-# instructions", requests for real legal advice, explicit "break character" asks)
-# get a guaranteed in-character deflection here instead of relying solely on the
-# model to hold the line every time.
+# Character-fidelity backstop for common phrasings. The instruction already tells
+# the model to stay in character, and in adversarial testing the model's own
+# instruction-following has been the real first line of defense — this regex catches
+# the most common prompt-injection/off-character phrasings as a deterministic second
+# layer, not a guarantee against every possible rephrasing (unicode tricks, indirect
+# framing, and non-English phrasing are known gaps; see examiner_report.md).
 _BREAK_CHARACTER_PATTERNS = re.compile(
-    r"ignore (your|previous|all) instructions"
-    r"|disregard (your|the) (instructions|prompt|role)"
+    r"ignore ((your|previous|all)\s+){1,2}instructions"
+    r"|disregard ((your|previous|the)\s+){1,2}(instructions|prompt|role)"
     r"|you('re| are) (an? )?(ai|language model|llm|chatbot|gemini)"
     r"|reveal your (system prompt|instructions)"
     r"|what are your instructions"
@@ -70,17 +71,47 @@ _LEGAL_ADVICE_PATTERNS = re.compile(
 )
 
 
+class UnknownCaseError(ValueError):
+    """Raised when a case_id doesn't match any file in case_files/."""
+
+
+class MalformedCaseError(ValueError):
+    """Raised when a case file is missing a field every case needs."""
+
+
+_REQUIRED_WITNESS_KEYS = ("name", "role", "goals", "affidavit", "escalation")
+
+
+def _validate_case(case: dict, case_id: str) -> dict:
+    if "witness" not in case:
+        raise MalformedCaseError(f"case '{case_id}' is missing the 'witness' section")
+    missing_witness = [k for k in _REQUIRED_WITNESS_KEYS if k not in case["witness"]]
+    if missing_witness:
+        raise MalformedCaseError(
+            f"case '{case_id}' witness section is missing: {', '.join(missing_witness)}"
+        )
+    if not case["witness"]["escalation"].get(1) or not case["witness"]["escalation"].get(3):
+        raise MalformedCaseError(f"case '{case_id}' needs escalation levels 1 and 3 at least")
+    if "rubric" not in case or not case["rubric"]:
+        raise MalformedCaseError(f"case '{case_id}' is missing a non-empty 'rubric' list")
+    return case
+
+
 def _load_case():
     with open(CASE_FILE, "r") as f:
-        return yaml.safe_load(f)
+        return _validate_case(yaml.safe_load(f), DEFAULT_CASE_ID)
 
 
 def load_case(case_id: str) -> dict:
     """Loads a case file by id (see CASE_FILES). Used by the server (F2) to
-    let the operator pick which fictional case a session runs against."""
-    path = CASE_FILES.get(case_id, CASE_FILE)
-    with open(path, "r") as f:
-        return yaml.safe_load(f)
+    let the operator pick which fictional case a session runs against.
+    Raises UnknownCaseError for an unrecognized id (no silent fallback to the
+    default case) and MalformedCaseError if the file is missing a required
+    field, so a bad case file fails at selection time, not mid-session."""
+    if case_id not in CASE_FILES:
+        raise UnknownCaseError(f"no case file for case_id '{case_id}'")
+    with open(CASE_FILES[case_id], "r") as f:
+        return _validate_case(yaml.safe_load(f), case_id)
 
 
 def _clamp_level(level) -> int:

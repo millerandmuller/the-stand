@@ -126,46 +126,83 @@ function renderDebrief(d) {
   `;
 }
 
-function connect() {
-  const sessionId = "sess_" + Math.random().toString(36).slice(2);
-  ws = new WebSocket(`ws://${location.host}/ws/${sessionId}`);
-  ws.onopen = () => {
-    ws.send(
-      JSON.stringify({
-        type: "start",
-        case_id: selectedCaseId,
-        pressure_level: parseInt(dialSlider.value, 10),
-      })
-    );
-  };
-  ws.onmessage = (evt) => {
-    const msg = JSON.parse(evt.data);
-    if (msg.type === "audio") {
-      playPcm16(msg.data);
-    } else if (msg.type === "transcript") {
-      transcriptView.innerHTML = `<span class="${msg.role}">${msg.role === "examiner" ? "You: " : "Witness: "}${msg.text}</span>`;
-    } else if (msg.type === "score") {
-      msg.events.forEach(addScoreLine);
-    } else if (msg.type === "debrief") {
-      renderDebrief(msg);
-    } else if (msg.type === "error") {
-      console.error("server error:", msg.message);
+function showStatus(text) {
+  const statusMsg = document.getElementById("statusMsg");
+  if (statusMsg) statusMsg.textContent = text;
+}
+
+// Connects the room WebSocket and resolves once it's open (or rejects with a
+// connection-specific error) so callers can tell a failed connection apart
+// from a denied microphone instead of lumping both into one vague message.
+function connectWS() {
+  return new Promise((resolve, reject) => {
+    const sessionId = "sess_" + Math.random().toString(36).slice(2);
+    // wss:// is required when the page itself is served over https — a
+    // hardcoded ws:// silently fails as mixed content on the deployed
+    // (https) Cloud Run URL even though it works on http://localhost.
+    const wsProtocol = location.protocol === "https:" ? "wss:" : "ws:";
+    let opened = false;
+    try {
+      ws = new WebSocket(`${wsProtocol}//${location.host}/ws/${sessionId}`);
+    } catch (err) {
+      reject(new Error("Couldn't open a connection: " + (err.message || err)));
+      return;
     }
-  };
-  ws.onclose = () => stopMic();
+    ws.onopen = () => {
+      opened = true;
+      ws.send(
+        JSON.stringify({
+          type: "start",
+          case_id: selectedCaseId,
+          pressure_level: parseInt(dialSlider.value, 10),
+        })
+      );
+      resolve();
+    };
+    ws.onmessage = (evt) => {
+      const msg = JSON.parse(evt.data);
+      if (msg.type === "audio") {
+        playPcm16(msg.data);
+      } else if (msg.type === "transcript") {
+        transcriptView.innerHTML = `<span class="${msg.role}">${msg.role === "examiner" ? "You: " : "Witness: "}${msg.text}</span>`;
+      } else if (msg.type === "score") {
+        msg.events.forEach(addScoreLine);
+      } else if (msg.type === "debrief") {
+        renderDebrief(msg);
+      } else if (msg.type === "error") {
+        showStatus("Room error: " + msg.message);
+      }
+    };
+    ws.onerror = () => {
+      if (!opened) reject(new Error("Couldn't reach the room's connection."));
+    };
+    ws.onclose = () => {
+      stopMic();
+      if (!opened) reject(new Error("The room's connection closed before it opened."));
+    };
+  });
 }
 
 startBtn.onclick = async () => {
   audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   playHead = audioCtx.currentTime;
+  showStatus("");
   try {
-    connect();
+    await connectWS();
+  } catch (err) {
+    showStatus(
+      "Reconnecting — the witness keeps his composure. (" + (err && err.message ? err.message : err) + ")"
+    );
+    return;
+  }
+  try {
     await startMic();
   } catch (err) {
-    disclaimerEl.textContent =
+    showStatus(
       "Couldn't reach your microphone — check the site's mic permission and try again. (" +
-      (err && err.message ? err.message : err) +
-      ")";
+        (err && err.message ? err.message : err) +
+        ")"
+    );
     if (ws) ws.close();
     return;
   }
