@@ -20,7 +20,7 @@ Message contract, server -> browser:
   {"type": "audio", "data": "<base64 pcm16 @24kHz>"}
   {"type": "transcript", "role": "examiner"|"witness", "text": "...", "partial": bool}
   {"type": "score", "events": [{"criterion","dxx","triggered","violation","note","score_delta"}]}
-  {"type": "debrief", "amta_score": int, "headline": "...", "moments": [...], "practice_focus": "..."}
+  {"type": "debrief", "amta_score": int, "headline": "...", "moments": [...], "practice_focus": "...", "cost": {...}}
   {"type": "error", "message": "..."}
 """
 
@@ -44,6 +44,7 @@ from google.genai import types
 
 from rubric_scorer.debrief import DebriefAgent
 from rubric_scorer.scorer import RubricScorer
+from server.cost_tracker import CostTracker
 from server.firestore_store import SessionStore
 from witness_agent.agent import (
     DISCLAIMER,
@@ -155,6 +156,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str) -> None:
     scored_events: list[dict] = []
     pending_examiner_text = ""
     current_witness_text = ""
+    cost_tracker = CostTracker()
 
     async def score_and_emit(examiner_q: str, witness_a: str) -> None:
         if not examiner_q.strip() or not witness_a.strip():
@@ -166,6 +168,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str) -> None:
                 json.dumps({"type": "error", "message": f"scorer error: {exc}"})
             )
             return
+        cost_tracker.add_scorer(result.usage_metadata)
         if not result.events:
             return
         events_payload = [
@@ -230,6 +233,9 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str) -> None:
             live_request_queue=live_request_queue,
             run_config=run_config,
         ):
+            if event.usage_metadata:
+                cost_tracker.add_witness(event.usage_metadata)
+
             if event.input_transcription and event.input_transcription.text:
                 text = event.input_transcription.text
                 pending_examiner_text += text
@@ -279,6 +285,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str) -> None:
         try:
             transcript = "\n".join(transcript_lines) or "(no exchanges recorded)"
             debrief = await debrief_agent.build(transcript, scored_events)
+            cost_tracker.add_debrief(debrief.usage_metadata)
             debrief_payload = {
                 "amta_score": debrief.amta_score,
                 "headline": debrief.headline,
@@ -291,6 +298,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str) -> None:
                     for m in debrief.moments
                 ],
                 "practice_focus": debrief.practice_focus,
+                "cost": cost_tracker.as_payload(),
             }
             await websocket.send_text(json.dumps({"type": "debrief", **debrief_payload}))
             await firestore_store.save_debrief(session_id, debrief_payload)

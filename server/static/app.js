@@ -118,11 +118,16 @@ function renderDebrief(d) {
         `<div class="moment"><em>${m.excerpt}</em><br>${m.why_it_matters} <span class="status">[${m.dxx}]</span></div>`
     )
     .join("");
+  const cost = d.cost;
+  const costLine = cost
+    ? `<div class="cost">${cost.total_tokens.toLocaleString()} tokens this session (witness ${cost.witness_tokens.total_tokens.toLocaleString()} · scorer ${cost.scorer_tokens.total_tokens.toLocaleString()} · debrief ${cost.debrief_tokens.total_tokens.toLocaleString()}) — $${cost.text_calls_usd_estimate.toFixed(4)} est. for the text-priced calls</div>`
+    : "";
   debriefView.innerHTML = `
     <h2>${d.headline}</h2>
     <div class="score">${d.amta_score}/10</div>
     ${moments}
     <p>${d.practice_focus}</p>
+    ${costLine}
   `;
 }
 

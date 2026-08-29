@@ -15,6 +15,10 @@ in-character answers you can push back on.
 - `case_files/martinez_v_nordbay.yaml` — one fictional case file (witness
   persona, affidavit, escalation levels, a short scoring rubric).
 
+See `docs/architecture.svg` for the full multi-agent architecture diagram
+(WitnessAgent -> RubricScorer -> DebriefAgent -> Firestore, Cloud Run
+deploy).
+
 ## Setup
 
 Requires Python 3.12.
@@ -356,3 +360,35 @@ judging, no mocked results) and a real Cloud Run deploy with Firestore
 session persistence. Still no full UI-shell polish, multi-language witness,
 or profession-module config swap — see the project brief for the remaining
 roadmap.
+
+**F5 (debrief) scope: text excerpts, not audio clips.** The brief asks for
+the two key debrief moments as audio clips; building session-audio
+buffering to cut and serve real clips wasn't worth the remaining build
+time, so F5 stays what it already was — `[D-xx]`-cited text excerpts with
+timestamps. Instead, the demo's Proof beat (brief 1.6, 2:00-2:45) shows
+`adk web`'s own eval-results viewer, which does render playable inline
+audio clips per turn when reviewing a run — per Google's ADK blog post
+(https://developers.googleblog.com/how-to-evaluate-live-voice-agents-in-adk/).
+One caveat worth being honest about: that playback comes from the
+underlying event data actually containing audio (`inline_data`) parts, which
+only a Live/bidi run produces. Our existing eval sets
+(`eval/eval_sets/rubric_scorer`, `eval/eval_sets/debrief`,
+`eval/eval_sets/novice_trajectory`) evaluate `rubric_judge_agent` and
+`debrief_judge_agent` — text-turn doubles of the RubricScorer/DebriefAgent
+judges, run through plain `run_async` — so their eval results have no audio
+to play back. Showing real playable clips in the Proof beat needs an eval
+set that actually runs WitnessAgent through `run_live`/bidi, which doesn't
+exist yet; that's the honest scoping gap behind this decision, not a
+detail to paper over in the demo script.
+
+**Cost telemetry and architecture diagram (Close beat, brief 1.6).**
+`server/cost_tracker.py` accumulates real `usage_metadata` token counts off
+the actual Gemini responses (witness, RubricScorer, DebriefAgent) for the
+session and ships them in the `debrief` WebSocket message's `cost` field,
+rendered as a line under the debrief panel. Token counts are never
+estimated — only the RubricScorer/DebriefAgent calls (`gemini-3.7-flash`,
+token-priced) get a USD estimate, computed from published pricing
+(https://ai.google.dev/gemini-api/docs/pricing, checked 2026-08-29); the
+witness runs on a Live/bidi audio model Google prices per minute of audio,
+not per token, so its token counts are shown without a fabricated dollar
+figure. Architecture diagram: `docs/architecture.svg`.

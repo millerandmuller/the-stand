@@ -72,6 +72,7 @@ class Debrief:
     headline: str
     moments: list[Moment] = field(default_factory=list)
     practice_focus: str = ""
+    usage_metadata: Optional[object] = None
 
 
 class DebriefAgent:
@@ -96,7 +97,7 @@ class DebriefAgent:
                 temperature=0.2,
             ),
         )
-        return self._parse(response.text)
+        return self._parse(response.text, response.usage_metadata)
 
     async def build(self, transcript: str, scored_events: list[dict]) -> Debrief:
         contents = (
@@ -114,9 +115,9 @@ class DebriefAgent:
                 temperature=0.2,
             ),
         )
-        return self._parse(response.text)
+        return self._parse(response.text, response.usage_metadata)
 
-    def _parse(self, text: str) -> Debrief:
+    def _parse(self, text: str, usage_metadata=None) -> Debrief:
         data = json.loads(text)
         moments = [Moment(**m) for m in data.get("moments", [])]
         return Debrief(
@@ -124,4 +125,5 @@ class DebriefAgent:
             headline=data["headline"],
             moments=moments,
             practice_focus=data["practice_focus"],
+            usage_metadata=usage_metadata,
         )

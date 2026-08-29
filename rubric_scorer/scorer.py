@@ -102,6 +102,7 @@ class ScoreEvent:
 class ScoringResult:
     events: list[ScoreEvent] = field(default_factory=list)
     running_score_delta: int = 0
+    usage_metadata: Optional[object] = None
 
 
 class RubricScorer:
@@ -135,7 +136,7 @@ class RubricScorer:
                 temperature=0.1,
             ),
         )
-        return self._parse(response.text)
+        return self._parse(response.text, response.usage_metadata)
 
     def score_exchange_sync(
         self, examiner_question: str, witness_answer: str
@@ -155,13 +156,13 @@ class RubricScorer:
                 temperature=0.1,
             ),
         )
-        return self._parse(response.text)
+        return self._parse(response.text, response.usage_metadata)
 
-    def _parse(self, text: str) -> ScoringResult:
+    def _parse(self, text: str, usage_metadata=None) -> ScoringResult:
         try:
             data = json.loads(text)
         except (json.JSONDecodeError, TypeError):
-            return ScoringResult()
+            return ScoringResult(usage_metadata=usage_metadata)
         events = [ScoreEvent(**e) for e in data.get("events", [])]
         delta = sum(e.score_delta for e in events)
-        return ScoringResult(events=events, running_score_delta=delta)
+        return ScoringResult(events=events, running_score_delta=delta, usage_metadata=usage_metadata)
