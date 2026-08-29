@@ -4,6 +4,13 @@
 # litigation, not a parallel "sales mode" in code. Deliberately a small,
 # domain-appropriate rubric (not a legal rubric wearing a sales costume).
 case_name: "Discovery Call: Vantage Robotics"
+display_name: "Vantage Robotics"
+case_number: null
+case_type: "Sparring · B2B discovery"
+display_order: 4
+card_summary: >
+  Not a courtroom: a discovery call. Surface the real pain point before
+  you pitch — or she ends the meeting.
 summary: >
   Fictional B2B sales-discovery call. The "witness" here is a prospective
   buyer at a mid-size logistics company being sparred with by a sales rep
@@ -13,6 +20,8 @@ summary: >
 witness:
   name: "Marisol Ferrer"
   role: "VP of Operations, a mid-size logistics company evaluating warehouse robotics"
+  disposition: "busy"
+  short_role: "prospective buyer"
   goals:
     - "Stay polite but guarded — won't volunteer budget or timeline unless asked directly."
     - "Deflect toward vague, low-commitment answers ('we're just exploring options') until the rep earns specifics."

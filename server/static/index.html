@@ -3,77 +3,344 @@
 <head>
 <meta charset="utf-8">
 <title>The Stand</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Sans:wght@400;500&display=swap">
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
+
+  /* Design tokens — design/the-stand/*.dc.html, read literally, not from memory. */
+  :root {
+    --bg: #0b0c0e;
+    --surface-1: #131416;
+    --surface-2: #101113;
+    --surface-3: #0e0f11;
+    --line-1: #232426;
+    --line-2: #2a2b2d;
+    --accent: #b08d57;
+    --accent-hover: #c9a76b;
+    --green: #4a9d6e;
+    --red: #b04a4a;
+    --text-1: #e8e6e1;
+    --text-2: #c9c7c0;
+    --text-3: #a5a39c;
+    --text-4: #8a8880;
+    --text-5: #7c7a75;
+  }
+
   body {
-    margin: 0; background: #0b0c0e; color: #e8e6e1;
-    font-family: 'Georgia', 'Times New Roman', serif;
+    margin: 0; background: var(--bg); color: var(--text-1);
+    font-family: 'Cormorant Garamond', Georgia, serif;
     height: 100vh; display: flex; flex-direction: column;
   }
+  .sans { font-family: 'IBM Plex Sans', system-ui, sans-serif; }
+  a { color: var(--accent); }
+  a:hover { color: var(--accent-hover); }
+
+  [hidden] { display: none !important; }
+
+  /* ---------- shared header ---------- */
   header {
-    padding: 14px 24px; border-bottom: 1px solid #232426;
     display: flex; align-items: center; justify-content: space-between;
+    padding: 16px 32px; border-bottom: 1px solid var(--line-1);
   }
-  header h1 { font-size: 17px; font-weight: 400; letter-spacing: 0.03em; margin: 0; }
-  header .disclaimer { font-size: 11px; color: #7c7a75; font-style: italic; }
-  main { flex: 1; display: flex; min-height: 0; }
-  .room { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 24px; padding: 24px; }
+  header .brand { display: flex; align-items: baseline; gap: 14px; }
+  header .brand .name { font-size: 19px; font-weight: 600; letter-spacing: 0.04em; }
+  header .brand .context { font-size: 12px; color: var(--text-4); }
+  header .disclaimer { font-size: 12.5px; font-style: italic; color: var(--text-5); }
+  header .live {
+    display: flex; align-items: center; gap: 7px; font-size: 11.5px; color: var(--green);
+  }
+  header .live .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); }
+  header .right { display: flex; align-items: center; gap: 16px; }
+
+  /* ---------- case select view ---------- */
+  #caseSelectView {
+    flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 40px; padding: 48px; overflow-y: auto;
+  }
+  .hero { display: flex; flex-direction: column; align-items: center; gap: 12px; text-align: center; }
+  .hero h1 { font-size: 44px; font-weight: 500; line-height: 1.15; max-width: 760px; margin: 0; }
+  .hero p { font-size: 14px; color: var(--text-4); max-width: 560px; line-height: 1.5; margin: 0; }
+
+  .case-grid {
+    display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 20px;
+    width: 100%; max-width: 1240px;
+  }
+  .case-card {
+    display: flex; flex-direction: column; border: 1px solid var(--line-2); border-radius: 4px;
+    background: var(--surface-2); overflow: hidden; cursor: pointer; text-align: left;
+    font: inherit; color: inherit; padding: 0; appearance: none;
+  }
+  .case-card .topline { height: 3px; background: #35342f; }
+  .case-card.selected { border-color: #35342f; background: var(--surface-1); }
+  .case-card.selected .topline { background: var(--accent); }
+  .case-card .body { display: flex; flex-direction: column; gap: 10px; padding: 22px 20px 18px; }
+  .case-card .kicker-row { display: flex; align-items: center; justify-content: space-between; }
+  .case-card .kicker { font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--text-4); }
+  .case-card.selected .kicker { color: var(--accent); }
+  .case-card .badge {
+    font-size: 10px; letter-spacing: 0.1em; padding: 3px 8px; border: 1px solid #3a3a35;
+    border-radius: 3px; color: var(--accent-hover);
+  }
+  .case-card .title { font-size: 24px; font-weight: 600; line-height: 1.2; }
+  .case-card .desc { font-size: 12.5px; line-height: 1.55; color: var(--text-3); }
+  .case-card .witness-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+  .case-card .witness-row svg { flex: none; }
+  .case-card .witness-row .who { font-size: 12px; color: var(--text-2); }
+  .case-card .witness-row .disposition { color: var(--text-5); }
+
+  .start-block { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+  .cta {
+    display: flex; align-items: center; gap: 12px; padding: 15px 42px; background: #17181a;
+    border: 1px solid var(--accent); border-radius: 4px; cursor: pointer; font: inherit; color: inherit;
+  }
+  .cta:hover { border-color: var(--accent-hover); }
+  .cta .label { font-size: 19px; letter-spacing: 0.02em; }
+  .start-hint { font-size: 11.5px; color: var(--text-5); }
+  #statusMsg { font-size: 12px; color: var(--text-4); min-height: 1.4em; }
+
+  /* ---------- room view ---------- */
+  #roomView { flex: 1; display: flex; min-height: 0; }
+  .room-main {
+    flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 36px; padding: 40px; position: relative;
+  }
+  .room-main::before {
+    content: ""; position: absolute; top: 0; left: 0; right: 0; height: 260px;
+    background: radial-gradient(ellipse 60% 100% at 50% 0%, rgba(176, 141, 87, 0.06), rgba(11, 12, 14, 0));
+    pointer-events: none;
+  }
+  .witness-block { display: flex; flex-direction: column; align-items: center; gap: 18px; }
+  .avatar {
+    width: 120px; height: 120px; border-radius: 50%; border: 1px solid #35342f; background: var(--surface-2);
+    display: flex; align-items: center; justify-content: center; box-shadow: 0 0 60px rgba(176, 141, 87, 0.07);
+    font-size: 40px; font-weight: 500; color: var(--text-2);
+  }
+  .waveform path { transition: opacity 0.3s; }
+  .waveform.live { animation: waveform-pulse 1.6s ease-in-out infinite; }
+  @keyframes waveform-pulse { 0%, 100% { opacity: 0.85; } 50% { opacity: 1; } }
+
+  .transcript { max-width: 660px; text-align: center; display: flex; flex-direction: column; gap: 10px; min-height: 4.5em; }
+  .transcript .examiner-line { font-size: 12.5px; color: #9db4c0; }
+  .transcript .witness-line { font-size: 25px; line-height: 1.4; color: var(--text-1); }
+  .transcript .interrupt-status {
+    font-size: 11.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); min-height: 1.4em;
+  }
+
+  .dial-block { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+  .dial-block .caption { font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-4); }
+  .dial-row { display: flex; align-items: center; gap: 14px; }
+  .dial-row .end-label { font-size: 12px; color: var(--text-4); }
+  .dial-row .end-label.hostile { color: var(--text-2); }
+  .dial-segments { display: flex; gap: 6px; }
+  .dial-segments button {
+    width: 54px; height: 8px; border-radius: 4px; background: #26272a; border: 1px solid #333;
+    padding: 0; cursor: pointer;
+  }
+  .dial-segments button.on { background: var(--accent); border-color: var(--accent); }
+
+  .end-btn {
+    display: flex; align-items: center; gap: 9px; padding: 10px 22px; background: #17181a;
+    border: 1px solid #333; border-radius: 4px; cursor: pointer; font: inherit; color: var(--text-2);
+  }
+  .end-btn:hover { border-color: #666; }
+  .end-btn .label { font-size: 15px; }
+
   .sidebar {
-    width: 340px; border-left: 1px solid #232426; padding: 16px;
-    overflow-y: auto; display: flex; flex-direction: column; gap: 10px;
-    font-family: -apple-system, sans-serif; font-size: 13px;
+    width: 360px; border-left: 1px solid var(--line-1); background: var(--surface-3);
+    display: flex; flex-direction: column; min-height: 0;
   }
-  .sidebar h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: #8a8880; margin: 0 0 4px; }
-  .score-line { padding: 8px 10px; border-radius: 3px; border-left: 3px solid #444; background: #131416; }
-  .score-line.triggered { border-left-color: #4a9d6e; }
-  .score-line.violation { border-left-color: #b04a4a; }
-  .score-line .note { display: block; margin-bottom: 3px; }
-  .score-line .cite { color: #8a8880; font-size: 11px; }
-  .score-total { font-size: 24px; font-family: -apple-system, sans-serif; }
-  select, button { font-family: inherit; background: #17181a; color: #e8e6e1; border: 1px solid #333; padding: 8px 12px; border-radius: 3px; }
-  button { cursor: pointer; }
-  button:hover { border-color: #666; }
-  #startBtn { font-size: 15px; padding: 12px 28px; }
-  .dial { display: flex; align-items: center; gap: 10px; }
-  .dial input[type=range] { width: 220px; }
-  .transcript { max-width: 640px; text-align: center; min-height: 3em; color: #c9c7c0; }
-  .transcript .examiner { color: #9db4c0; }
-  .transcript .witness { color: #e8e6e1; }
-  .case-picker { display: flex; gap: 10px; align-items: center; }
-  .status { font-size: 12px; color: #8a8880; font-family: -apple-system, sans-serif; }
-  #debrief { display: none; max-width: 520px; text-align: center; }
-  #debrief h2 { font-weight: 400; }
-  #debrief .moment { text-align: left; background: #131416; padding: 10px 12px; border-radius: 3px; margin: 8px 0; font-size: 13px; }
-  #debrief .score { font-size: 40px; }
-  #debrief .cost { margin-top: 14px; font-size: 11px; color: #7c7a75; font-family: -apple-system, sans-serif; }
+  .sidebar .sidebar-header {
+    display: flex; align-items: baseline; justify-content: space-between; padding: 18px 20px 14px;
+    border-bottom: 1px solid var(--line-1);
+  }
+  .sidebar .sidebar-header .label { font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--text-4); }
+  .sidebar .sidebar-header .score-row { display: flex; align-items: baseline; gap: 6px; }
+  .sidebar .sidebar-header .score-total { font-size: 30px; font-weight: 500; color: var(--text-1); }
+  .sidebar .sidebar-header .score-scale { font-size: 12px; color: var(--text-5); }
+  .sidebar .score-lines { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding: 16px 20px; }
+  .sidebar .footer { padding: 12px 20px; border-top: 1px solid var(--line-1); font-size: 10.5px; color: var(--text-5); }
+
+  .score-line {
+    border-left: 3px solid #35342f; background: var(--surface-2); border-radius: 3px; padding: 10px 12px;
+    display: flex; flex-direction: column; gap: 4px;
+  }
+  .score-line.triggered { border-left-color: var(--green); background: var(--surface-1); }
+  .score-line.violation { border-left-color: var(--red); background: var(--surface-1); }
+  .score-line .row { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+  .score-line .note { font-size: 12.5px; font-weight: 500; color: var(--text-1); }
+  .score-line .ts { font-size: 10.5px; color: var(--text-5); flex: none; }
+  .score-line .cite { font-size: 11px; color: var(--text-4); }
+
+  /* ---------- debrief view ---------- */
+  #debriefView { flex: 1; display: flex; align-items: center; justify-content: center; padding: 48px; overflow-y: auto; }
+  .debrief-inner { width: 100%; max-width: 860px; display: flex; flex-direction: column; gap: 34px; }
+  .debrief-head { display: flex; align-items: center; gap: 40px; flex-wrap: wrap; }
+  .score-tile {
+    display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 26px 38px;
+    border: 1px solid #35342f; border-radius: 4px; background: var(--surface-2); flex: none;
+  }
+  .score-tile .big { font-size: 56px; font-weight: 500; line-height: 1; }
+  .score-tile .big .scale { font-size: 22px; color: var(--text-5); }
+  .score-tile .caption { font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--accent); }
+  .debrief-headline { display: flex; flex-direction: column; gap: 8px; }
+  .debrief-headline h2 { font-size: 34px; font-weight: 500; line-height: 1.2; margin: 0; }
+  .debrief-headline p { font-size: 13.5px; line-height: 1.55; color: var(--text-3); max-width: 520px; margin: 0; }
+
+  .moments { display: flex; flex-direction: column; gap: 14px; }
+  .moment-card {
+    border: 1px solid var(--line-2); border-left: 3px solid #35342f; border-radius: 4px;
+    background: var(--surface-1); padding: 16px 20px; display: flex; flex-direction: column; gap: 8px;
+  }
+  .moment-card.positive { border-left-color: var(--green); }
+  .moment-card.negative { border-left-color: var(--red); }
+  .moment-card .row { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  .moment-card .label { font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-4); }
+  .moment-card.positive .label { color: var(--green); }
+  .moment-card.negative .label { color: var(--red); }
+  .moment-card .cite { font-size: 11px; color: var(--text-4); }
+  .moment-card .excerpt { font-size: 19px; line-height: 1.5; color: var(--text-1); }
+  .moment-card .why { font-size: 12px; color: var(--text-4); }
+
+  .next-rep {
+    display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+    padding: 16px 20px; border: 1px solid var(--line-2); border-radius: 4px; background: var(--surface-3);
+  }
+  .next-rep .kicker { font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--accent); }
+  .next-rep .text { font-size: 18px; margin-top: 3px; }
+  .next-rep .cta { padding: 11px 24px; }
+  .next-rep .cta .label { font-size: 16px; }
+
+  .cost-row {
+    display: flex; justify-content: space-between; align-items: center; font-size: 11px; color: var(--text-5);
+    flex-wrap: wrap; gap: 6px;
+  }
 </style>
 </head>
 <body>
-<header>
-  <h1>The Stand</h1>
-  <span class="disclaimer" id="disclaimer">The Stand trains technique. It does not give legal advice.</span>
-</header>
-<main>
-  <div class="room" id="roomView">
-    <div class="case-picker" id="casePicker"></div>
-    <button id="startBtn">Take the stand.</button>
-    <div class="status" id="statusMsg" role="alert"></div>
-    <div class="dial" id="dialControl" style="display:none">
-      <span class="status">Cooperative</span>
-      <input type="range" min="1" max="3" value="1" id="dialSlider">
-      <span class="status">Hostile</span>
-    </div>
-    <div class="transcript" id="transcriptView"></div>
-    <button id="endBtn" style="display:none">End session.</button>
-    <div id="debrief"></div>
+
+<!-- ============ CASE SELECT ============ -->
+<header id="caseSelectHeader">
+  <div class="brand">
+    <div class="name">The Stand</div>
+    <div class="sans context">Cross-examination sparring</div>
   </div>
+  <div class="disclaimer" id="disclaimer">The Stand trains technique. It does not give legal advice.</div>
+</header>
+<main id="caseSelectView">
+  <div class="hero">
+    <h1>A hundred courtrooms before your first real one.</h1>
+    <p class="sans">Pick a case file. Cross-examine a live witness by voice. Every question is scored against the published ballot.</p>
+  </div>
+
+  <div class="case-grid sans" id="caseGrid"></div>
+
+  <div class="start-block">
+    <button class="cta" id="startBtn">
+      <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="#e8e6e1" stroke-width="1.4"><rect x="6.5" y="1.8" width="5" height="9" rx="2.5"></rect><path d="M3.5 8.5a5.5 5.5 0 0 0 11 0"></path><path d="M9 14v2.4"></path></svg>
+      <span class="label">Take the stand.</span>
+    </button>
+    <div class="sans start-hint">Voice session · you can interrupt the witness at any time</div>
+    <div class="sans" id="statusMsg" role="alert"></div>
+  </div>
+</main>
+
+<!-- ============ ROOM ============ -->
+<header id="roomHeader" hidden>
+  <div class="brand">
+    <div class="name">The Stand</div>
+    <div class="sans context" id="roomContext"></div>
+  </div>
+  <div class="right">
+    <div class="sans live"><div class="dot"></div><div id="liveClock">LIVE · 00:00</div></div>
+    <div class="disclaimer">Trains technique. Not legal advice.</div>
+  </div>
+</header>
+<main id="roomView" hidden>
+  <div class="room-main">
+    <div class="witness-block">
+      <div class="avatar" id="avatarInitials">--</div>
+      <svg class="waveform sans" id="waveform" width="320" height="44" viewBox="0 0 320 44" fill="none">
+        <g stroke="#b08d57" stroke-width="3" stroke-linecap="round" opacity="0.85">
+          <path d="M12 22v-4M24 22v-8M36 22v-14M48 22v-7M60 22v-16M72 22v-10M84 22v-18M96 22v-6M108 22v-12M120 22v-16M132 22v-5M144 22v-13M160 22v-17M176 22v-9M188 22v-15M200 22v-6M212 22v-11M224 22v-16M236 22v-8M248 22v-13M260 22v-4M272 22v-9M284 22v-6M296 22v-11M308 22v-3"></path>
+        </g>
+        <g stroke="#b08d57" stroke-width="3" stroke-linecap="round" opacity="0.35">
+          <path d="M12 22v4M24 22v8M36 22v14M48 22v7M60 22v16M72 22v10M84 22v18M96 22v6M108 22v12M120 22v16M132 22v5M144 22v13M160 22v17M176 22v9M188 22v15M200 22v6M212 22v11M224 22v16M236 22v8M248 22v13M260 22v4M272 22v9M284 22v6M296 22v11M308 22v3"></path>
+        </g>
+      </svg>
+      <div class="transcript" id="transcriptView"></div>
+    </div>
+
+    <div class="dial-block">
+      <div class="sans caption">Witness pressure</div>
+      <div class="dial-row sans">
+        <div class="end-label">Cooperative</div>
+        <div class="dial-segments" id="dialSegments">
+          <button data-level="1" aria-label="Pressure level 1"></button>
+          <button data-level="2" aria-label="Pressure level 2"></button>
+          <button data-level="3" aria-label="Pressure level 3"></button>
+        </div>
+        <div class="end-label hostile">Hostile</div>
+      </div>
+    </div>
+
+    <button class="end-btn sans" id="endBtn">
+      <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="#c9c7c0" stroke-width="1.4"><rect x="2.5" y="2.5" width="9" height="9" rx="1"></rect></svg>
+      <span class="label">End session.</span>
+    </button>
+  </div>
+
   <aside class="sidebar">
-    <h2>Rubric</h2>
-    <div class="score-total">Score: <span id="scoreTotal">0</span></div>
-    <div id="scoreLines"></div>
+    <div class="sidebar-header sans">
+      <div class="label">Rubric</div>
+      <div class="score-row">
+        <div class="score-total" id="scoreTotal">0</div>
+        <div class="score-scale">/ 10 · AMTA scale</div>
+      </div>
+    </div>
+    <div class="score-lines sans" id="scoreLines"></div>
+    <div class="footer sans">Every line cites its source. Nothing is scored without one.</div>
   </aside>
 </main>
+
+<!-- ============ DEBRIEF ============ -->
+<header id="debriefHeader" hidden>
+  <div class="brand">
+    <div class="name">The Stand</div>
+    <div class="sans context" id="debriefContext"></div>
+  </div>
+  <div class="disclaimer">Trains technique. Not legal advice.</div>
+</header>
+<main id="debriefView" hidden>
+  <div class="debrief-inner">
+    <div class="debrief-head">
+      <div class="score-tile sans">
+        <div class="big" id="debriefScore">0<span class="scale"> / 10</span></div>
+        <div class="caption">AMTA ballot scale</div>
+      </div>
+      <div class="debrief-headline">
+        <h2 id="debriefHeadline"></h2>
+        <p class="sans" id="debriefFocus"></p>
+      </div>
+    </div>
+
+    <div class="moments" id="debriefMoments"></div>
+
+    <div class="next-rep">
+      <div>
+        <div class="sans kicker">Next rep</div>
+        <div class="text" id="debriefNextRep">One new fact per question.</div>
+      </div>
+      <button class="cta" id="againBtn"><span class="label">Take the stand again.</span></button>
+    </div>
+
+    <div class="cost-row sans">
+      <div id="debriefCost"></div>
+      <div>Full transcript · adk eval replay</div>
+    </div>
+  </div>
+</main>
+
 <script src="/static/app.js"></script>
 </body>
 </html>

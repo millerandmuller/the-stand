@@ -1,5 +1,11 @@
 # Fictional case file. No real persons, companies, or client facts.
 case_name: "Chen v. Summit Biotech"
+case_number: "26-0087"
+case_type: "Civil"
+display_order: 2
+card_summary: >
+  A contaminated reagent batch, months of ruined research — and the QC
+  manager who cleared it for shipment.
 summary: >
   Fictional civil dispute. Plaintiff Amara Chen alleges Summit Biotech Inc.
   released a contaminated reagent batch that ruined months of her lab's
@@ -9,6 +15,8 @@ summary: >
 witness:
   name: "Priya Raghavan"
   role: "Summit Biotech quality-control lab manager"
+  disposition: "precise"
+  short_role: "QC lab manager"
   goals:
     - "Avoid admitting she signed off on the batch before the required contamination assay finished."
     - "Deflect blame toward the overnight lab technician whenever possible."

@@ -19,6 +19,8 @@ Message contract, browser -> server (JSON text frames on /ws/{session_id}):
 Message contract, server -> browser:
   {"type": "audio", "data": "<base64 pcm16 @24kHz>"}
   {"type": "transcript", "role": "examiner"|"witness", "text": "...", "partial": bool}
+  {"type": "interrupted"}  -- forwards the Live API's real LlmResponse.interrupted
+                              signal (genuine barge-in, not a UI guess)
   {"type": "score", "events": [{"criterion","dxx","triggered","violation","note","score_delta"}]}
   {"type": "debrief", "amta_score": int, "headline": "...", "moments": [...], "practice_focus": "...", "cost": {...}}
   {"type": "error", "message": "..."}
@@ -77,14 +79,25 @@ async def list_cases():
     out = []
     for case_id in CASE_FILES:
         case = load_case(case_id)
+        language = case.get("language")
         out.append(
             {
                 "case_id": case_id,
                 "case_name": case["case_name"],
-                "witness_name": case["witness"]["name"],
+                "display_name": case.get("display_name", case["case_name"]),
+                "case_number": case.get("case_number"),
+                "case_type": case.get("case_type", "Civil"),
+                "display_order": case.get("display_order", 99),
+                "card_summary": (case.get("card_summary") or case["summary"]).strip(),
                 "summary": case["summary"].strip(),
+                "witness_name": case["witness"]["name"],
+                "witness_role": case["witness"]["role"],
+                "witness_short_role": case["witness"].get("short_role", case["witness"]["role"]),
+                "witness_disposition": case["witness"].get("disposition"),
+                "language": {"code": language["code"], "name": language["name"]} if language else None,
             }
         )
+    out.sort(key=lambda c: c["display_order"])
     return {"cases": out, "disclaimer": DISCLAIMER}
 
 
@@ -244,6 +257,13 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str) -> None:
         ):
             if event.usage_metadata:
                 cost_tracker.add_witness(event.usage_metadata)
+
+            # Real Live-API barge-in signal (LlmResponse.interrupted), not a
+            # UI guess: the model actually stopped mid-turn because the user
+            # started talking over it. Forwarded as its own message so the
+            # UI's "witness yields" status is never shown without this.
+            if event.interrupted:
+                await websocket.send_text(json.dumps({"type": "interrupted"}))
 
             if event.input_transcription and event.input_transcription.text:
                 text = event.input_transcription.text

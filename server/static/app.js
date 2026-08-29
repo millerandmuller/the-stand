@@ -3,17 +3,39 @@
 // per the brief, this is exactly the amount of frontend a one-room product
 // needs, not a "kein Framework-Ausbau" violation.
 
-const casePicker = document.getElementById("casePicker");
+// ---------- DOM refs ----------
+const caseSelectHeader = document.getElementById("caseSelectHeader");
+const caseSelectView = document.getElementById("caseSelectView");
+const roomHeader = document.getElementById("roomHeader");
+const roomView = document.getElementById("roomView");
+const debriefHeader = document.getElementById("debriefHeader");
+const debriefView = document.getElementById("debriefView");
+
+const caseGrid = document.getElementById("caseGrid");
 const startBtn = document.getElementById("startBtn");
-const endBtn = document.getElementById("endBtn");
-const dialControl = document.getElementById("dialControl");
-const dialSlider = document.getElementById("dialSlider");
-const transcriptView = document.getElementById("transcriptView");
-const scoreLines = document.getElementById("scoreLines");
-const scoreTotal = document.getElementById("scoreTotal");
-const debriefView = document.getElementById("debrief");
+const statusMsg = document.getElementById("statusMsg");
 const disclaimerEl = document.getElementById("disclaimer");
 
+const roomContext = document.getElementById("roomContext");
+const liveClock = document.getElementById("liveClock");
+const avatarInitials = document.getElementById("avatarInitials");
+const waveform = document.getElementById("waveform");
+const transcriptView = document.getElementById("transcriptView");
+const dialSegments = document.getElementById("dialSegments");
+const endBtn = document.getElementById("endBtn");
+const scoreLines = document.getElementById("scoreLines");
+const scoreTotal = document.getElementById("scoreTotal");
+
+const debriefContext = document.getElementById("debriefContext");
+const debriefScore = document.getElementById("debriefScore");
+const debriefHeadline = document.getElementById("debriefHeadline");
+const debriefFocus = document.getElementById("debriefFocus");
+const debriefMoments = document.getElementById("debriefMoments");
+const debriefNextRep = document.getElementById("debriefNextRep");
+const debriefCost = document.getElementById("debriefCost");
+const againBtn = document.getElementById("againBtn");
+
+// ---------- state ----------
 let ws = null;
 let audioCtx = null;
 let micStream = null;
@@ -21,23 +43,82 @@ let micNode = null;
 let playHead = 0;
 let runningScore = 0;
 let selectedCaseId = null;
+let cases = [];
+let sessionStartMs = 0;
+let clockTimer = null;
+let examinerAccum = "";
+let witnessAccum = "";
+let scoreEventLog = []; // {dxx, triggered, violation} — used to color debrief moments honestly
+
+function showView(name) {
+  const map = {
+    caseSelect: [caseSelectHeader, caseSelectView],
+    room: [roomHeader, roomView],
+    debrief: [debriefHeader, debriefView],
+  };
+  for (const key of Object.keys(map)) {
+    const on = key === name;
+    map[key][0].hidden = !on;
+    map[key][1].hidden = !on;
+  }
+}
+
+function initialsFor(name) {
+  return name
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((w) => w[0].toUpperCase())
+    .join("");
+}
+
+// ---------- case select ----------
+function renderCaseGrid() {
+  caseGrid.innerHTML = "";
+  for (const c of cases) {
+    const card = document.createElement("button");
+    card.type = "button";
+    card.className = "case-card" + (c.case_id === selectedCaseId ? " selected" : "");
+    card.setAttribute("aria-pressed", c.case_id === selectedCaseId ? "true" : "false");
+
+    const kicker = c.case_number ? `Case No. ${c.case_number} · ${c.case_type}` : c.case_type;
+    const langBadge = c.language
+      ? `<div class="badge">${c.language.code.slice(0, 2).toUpperCase()} · ${c.language.name.toUpperCase()}</div>`
+      : "";
+
+    card.innerHTML = `
+      <div class="topline"></div>
+      <div class="body">
+        <div class="kicker-row">
+          <div class="kicker">${kicker}</div>
+          ${langBadge}
+        </div>
+        <div class="title">${c.display_name}</div>
+        <div class="desc">${c.card_summary}</div>
+        <div class="witness-row">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="#8a8880" stroke-width="1.3"><circle cx="8" cy="5.5" r="2.6"></circle><path d="M2.8 13.5c0.8-2.7 2.9-4 5.2-4s4.4 1.3 5.2 4"></path></svg>
+          <div class="who">${c.witness_name} <span class="disposition">· ${c.witness_short_role}${c.witness_disposition ? " · " + c.witness_disposition : ""}</span></div>
+        </div>
+      </div>
+    `;
+    card.onclick = () => {
+      selectedCaseId = c.case_id;
+      renderCaseGrid();
+    };
+    caseGrid.appendChild(card);
+  }
+}
 
 async function loadCases() {
   const res = await fetch("/api/cases");
   const data = await res.json();
   disclaimerEl.textContent = data.disclaimer;
-  const select = document.createElement("select");
-  for (const c of data.cases) {
-    const opt = document.createElement("option");
-    opt.value = c.case_id;
-    opt.textContent = `${c.case_name} — witness: ${c.witness_name}`;
-    select.appendChild(opt);
-  }
-  select.onchange = () => (selectedCaseId = select.value);
-  selectedCaseId = data.cases[0]?.case_id || null;
-  casePicker.appendChild(select);
+  cases = data.cases;
+  selectedCaseId = cases[0]?.case_id || null;
+  renderCaseGrid();
 }
 
+// ---------- audio plumbing (unchanged mechanism — human-verified voice path) ----------
 function base64FromInt16(int16arr) {
   const bytes = new Uint8Array(int16arr.buffer);
   let binary = "";
@@ -116,44 +197,108 @@ function playPcm16(base64data, sampleRate = 24000) {
   playHead = startAt + buffer.duration;
 }
 
+// ---------- room rendering ----------
+function elapsedLabel() {
+  const s = Math.max(0, Math.round((Date.now() - sessionStartMs) / 1000));
+  const mm = String(Math.floor(s / 60)).padStart(2, "0");
+  const ss = String(s % 60).padStart(2, "0");
+  return `${mm}:${ss}`;
+}
+
+function tickClock() {
+  liveClock.textContent = "LIVE · " + elapsedLabel();
+}
+
+function renderTranscript() {
+  let html = "";
+  if (examinerAccum) html += `<div class="examiner-line sans">YOU — "${examinerAccum}"</div>`;
+  if (witnessAccum) html += `<div class="witness-line">"${witnessAccum}"</div>`;
+  transcriptView.innerHTML = html + `<div class="interrupt-status sans" id="interruptStatus"></div>`;
+}
+
+function showInterrupted() {
+  const el = document.getElementById("interruptStatus");
+  if (el) el.textContent = "Interrupted — witness yields";
+}
+
 function addScoreLine(evt) {
+  scoreEventLog.push({
+    dxx: evt.dxx,
+    triggered: !!evt.triggered,
+    violation: !!evt.violation,
+    note: evt.note,
+    criterion: evt.criterion,
+    ts: elapsedLabel(),
+  });
   const div = document.createElement("div");
   div.className = "score-line " + (evt.violation ? "violation" : evt.triggered ? "triggered" : "");
-  div.innerHTML = `<span class="note">${evt.note}</span><span class="cite">[${evt.dxx}] ${evt.criterion}</span>`;
+  div.innerHTML = `
+    <div class="row">
+      <div class="note">${evt.note}</div>
+      <div class="ts">${elapsedLabel()}</div>
+    </div>
+    <div class="cite">[${evt.dxx}] ${evt.criterion}</div>
+  `;
   scoreLines.prepend(div);
   runningScore += evt.score_delta;
   scoreTotal.textContent = runningScore;
 }
 
+// ---------- debrief rendering ----------
+// honest lookup: every moment's [D-xx] traces back to this session's own
+// score events (note/criterion/timestamp/polarity), never fabricated.
+function momentScoreEvent(dxx) {
+  return [...scoreEventLog].reverse().find((e) => e.dxx === dxx);
+}
+
 function renderDebrief(d) {
-  document.getElementById("roomView").querySelectorAll("*:not(#debrief)").forEach((el) => {
-    if (el.id !== "debrief") el.style.display = "none";
-  });
-  debriefView.style.display = "block";
-  const moments = d.moments
-    .map(
-      (m) =>
-        `<div class="moment"><em>${m.excerpt}</em><br>${m.why_it_matters} <span class="status">[${m.dxx}]</span></div>`
-    )
-    .join("");
+  stopMic();
+  clearInterval(clockTimer);
+  showView("debrief");
+
+  const selected = cases.find((c) => c.case_id === selectedCaseId);
+  debriefContext.textContent = `Session closed · ${selected ? selected.display_name : ""} · ${elapsedLabel().replace(":", " min ")} s`;
+
+  debriefScore.innerHTML = `${d.amta_score}<span class="scale"> / 10</span>`;
+  debriefHeadline.textContent = d.headline;
+  debriefFocus.textContent = "";
+
+  debriefMoments.innerHTML = "";
+  for (const m of d.moments || []) {
+    const hit = momentScoreEvent(m.dxx);
+    const polarity = hit ? (hit.violation ? "negative" : hit.triggered ? "positive" : "") : "";
+    const labelText = hit && hit.ts ? `Moment · ${hit.ts} — ${hit.note}` : `Moment — [${m.dxx}]`;
+    const citeText = hit && hit.criterion ? hit.criterion : m.dxx;
+    const card = document.createElement("div");
+    card.className = "moment-card" + (polarity ? " " + polarity : "");
+    card.innerHTML = `
+      <div class="row sans">
+        <div class="label">${labelText}</div>
+        <div class="cite">${citeText}</div>
+      </div>
+      <div class="excerpt">"${m.excerpt}"</div>
+      <div class="why sans">${m.why_it_matters}</div>
+    `;
+    debriefMoments.appendChild(card);
+  }
+
+  debriefNextRep.textContent = d.practice_focus;
+
   const cost = d.cost;
-  const costLine = cost
-    ? `<div class="cost">${cost.total_tokens.toLocaleString()} tokens this session (witness ${cost.witness_tokens.total_tokens.toLocaleString()} · scorer ${cost.scorer_tokens.total_tokens.toLocaleString()} · debrief ${cost.debrief_tokens.total_tokens.toLocaleString()}) — $${cost.text_calls_usd_estimate.toFixed(4)} est. for the text-priced calls</div>`
-    : "";
-  debriefView.innerHTML = `
-    <h2>${d.headline}</h2>
-    <div class="score">${d.amta_score}/10</div>
-    ${moments}
-    <p>${d.practice_focus}</p>
-    ${costLine}
-  `;
+  if (cost) {
+    const tokensIn = cost.witness_tokens.prompt_tokens + cost.scorer_tokens.prompt_tokens + cost.debrief_tokens.prompt_tokens;
+    const tokensOut = cost.witness_tokens.candidates_tokens + cost.scorer_tokens.candidates_tokens + cost.debrief_tokens.candidates_tokens;
+    debriefCost.textContent = `Session cost: ${tokensIn.toLocaleString()} tokens in · ${tokensOut.toLocaleString()} out · est. $${cost.text_calls_usd_estimate.toFixed(2)} (text scoring calls, published rates)`;
+  } else {
+    debriefCost.textContent = "";
+  }
 }
 
 function showStatus(text) {
-  const statusMsg = document.getElementById("statusMsg");
-  if (statusMsg) statusMsg.textContent = text;
+  statusMsg.textContent = text;
 }
 
+// ---------- websocket ----------
 // Connects the room WebSocket and resolves once it's open (or rejects with a
 // connection-specific error) so callers can tell a failed connection apart
 // from a denied microphone instead of lumping both into one vague message.
@@ -177,7 +322,7 @@ function connectWS() {
         JSON.stringify({
           type: "start",
           case_id: selectedCaseId,
-          pressure_level: parseInt(dialSlider.value, 10),
+          pressure_level: currentDialLevel,
         })
       );
       resolve();
@@ -186,8 +331,21 @@ function connectWS() {
       const msg = JSON.parse(evt.data);
       if (msg.type === "audio") {
         playPcm16(msg.data);
+        waveform.classList.add("live");
       } else if (msg.type === "transcript") {
-        transcriptView.innerHTML = `<span class="${msg.role}">${msg.role === "examiner" ? "You: " : "Witness: "}${msg.text}</span>`;
+        if (msg.role === "examiner") {
+          if (witnessAccum) {
+            // a fresh examiner turn starting — clear the previous witness
+            // line so the pair always reflects the current exchange.
+            witnessAccum = "";
+          }
+          examinerAccum += msg.text;
+        } else if (msg.role === "witness") {
+          witnessAccum += msg.text;
+        }
+        renderTranscript();
+      } else if (msg.type === "interrupted") {
+        showInterrupted();
       } else if (msg.type === "score") {
         msg.events.forEach(addScoreLine);
       } else if (msg.type === "debrief") {
@@ -206,7 +364,27 @@ function connectWS() {
   });
 }
 
-startBtn.onclick = async () => {
+// ---------- dial ----------
+let currentDialLevel = 1;
+
+function renderDial() {
+  [...dialSegments.children].forEach((btn) => {
+    btn.classList.toggle("on", parseInt(btn.dataset.level, 10) <= currentDialLevel);
+  });
+}
+
+dialSegments.addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-level]");
+  if (!btn) return;
+  currentDialLevel = parseInt(btn.dataset.level, 10);
+  renderDial();
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: "dial", level: currentDialLevel }));
+  }
+});
+
+// ---------- start / end ----------
+async function beginSession() {
   audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   playHead = audioCtx.currentTime;
   showStatus("");
@@ -229,25 +407,40 @@ startBtn.onclick = async () => {
     if (ws) ws.close();
     return;
   }
-  startBtn.style.display = "none";
-  casePicker.style.display = "none";
-  dialControl.style.display = "flex";
-  endBtn.style.display = "inline-block";
-};
+
+  const selected = cases.find((c) => c.case_id === selectedCaseId);
+  const verb = selected && selected.case_type && selected.case_type.includes("Sparring") ? "discovery call with" : "cross-examination of";
+  roomContext.textContent = selected ? `${selected.case_name} · ${verb} ${selected.witness_name}` : "";
+  avatarInitials.textContent = selected ? initialsFor(selected.witness_name) : "--";
+
+  examinerAccum = "";
+  witnessAccum = "";
+  scoreEventLog = [];
+  runningScore = 0;
+  scoreTotal.textContent = "0";
+  scoreLines.innerHTML = "";
+  transcriptView.innerHTML = "";
+  currentDialLevel = 1;
+  renderDial();
+
+  sessionStartMs = Date.now();
+  tickClock();
+  clockTimer = setInterval(tickClock, 1000);
+
+  showView("room");
+}
+
+startBtn.onclick = beginSession;
 
 endBtn.onclick = () => {
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type: "end_session" }));
   }
   stopMic();
-  endBtn.style.display = "none";
-  dialControl.style.display = "none";
 };
 
-dialSlider.oninput = () => {
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ type: "dial", level: parseInt(dialSlider.value, 10) }));
-  }
+againBtn.onclick = () => {
+  showView("caseSelect");
 };
 
 loadCases();

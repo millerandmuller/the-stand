@@ -1,5 +1,11 @@
 # Fictional case file. No real persons, companies, or client facts.
 case_name: "Martinez v. Nordbay"
+case_number: "26-0114"
+case_type: "Civil"
+display_order: 1
+card_summary: >
+  A mislabeled hazardous pallet, a damaged warehouse — and a shift
+  supervisor who was there that night.
 summary: >
   Fictional civil dispute. Plaintiff Elena Martinez alleges Nordbay Logistics
   Inc. shipped a mislabeled hazardous pallet that damaged her warehouse.
@@ -9,6 +15,8 @@ summary: >
 witness:
   name: "Dale Petrov"
   role: "Nordbay Logistics night-shift supervisor"
+  disposition: "defensive"
+  short_role: "shift supervisor"
   goals:
     - "Avoid admitting he skipped the mandatory hazmat placard check."
     - "Deflect blame toward the labeling vendor whenever possible."

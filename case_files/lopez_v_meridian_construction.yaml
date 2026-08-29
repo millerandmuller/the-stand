@@ -3,6 +3,12 @@
 # witness — language is a witness trait, not a UI translation. The rubric
 # stays FRE/AMTA regardless (Sprache ≠ Jurisdiktion, brief section 3 F12).
 case_name: "Lopez v. Meridian Construction"
+case_number: null
+case_type: "Deposition · Workplace injury"
+display_order: 3
+card_summary: >
+  A scaffolding fall, an unsigned safety log — and a site foreman who
+  testifies in Spanish.
 summary: >
   Fictional workplace-injury deposition. Plaintiff Ricardo Lopez, a
   scaffolding crew member, was injured in a fall at a Meridian Construction
@@ -13,6 +19,8 @@ summary: >
 witness:
   name: "Hector Villanueva"
   role: "Meridian Construction site foreman"
+  disposition: "guarded"
+  short_role: "site foreman"
   goals:
     - "Avoid admitting he signed the morning safety log without personally checking every harness."
     - "Deflect responsibility toward the equipment rental company whenever possible."
