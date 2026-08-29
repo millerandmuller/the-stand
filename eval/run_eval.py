@@ -6,14 +6,13 @@ What this actually runs, and why (read this before trusting a PASS):
 1. `rubric_judge_agent` / `debrief_judge_agent` are turn-based ADK Agent
    doubles that share RubricScorer's / DebriefAgent's exact system prompts
    (see eval/rubric_judge_agent/agent.py, eval/debrief_judge_agent/agent.py).
-   They exist because stock `adk eval` / `AgentEvaluator` evaluate agents
-   through `run_async` on text turns — there is no session-replay path for
-   a bidi Live connection in ADK 2.8.0's evaluation framework (checked
-   adk-docs `evaluate/index.md`), so WitnessAgent itself (Live/bidi) cannot
-   be evaluated this way. This is the honest scoped-down equivalent the
-   brief allows: evaluate the turn-based judging logic that IS the
-   product's trust mechanism, through the real `AgentEvaluator` pipeline,
-   using ADK's `rubric_based_final_response_quality_v1` /
+   They exist because stock `AgentEvaluator.evaluate()` (the entry point
+   this script uses) drives agents through `run_async` on text turns, with
+   no Live/bidi path — so WitnessAgent itself (Live/bidi) cannot be
+   evaluated through *this* script. This is the honest scoped-down
+   equivalent for the turn-based judging logic that IS the product's trust
+   mechanism, through the real `AgentEvaluator` pipeline, using ADK's
+   `rubric_based_final_response_quality_v1` /
    `rubric_based_multi_turn_trajectory_quality_v1` LLM-as-judge criteria
    (gemini-3.7-flash) with per-case rubrics instead of exact-match JSON
    diffing.
@@ -30,6 +29,26 @@ What this actually runs, and why (read this before trusting a PASS):
    DIRECTLY (not through ADK eval) against the same novice trajectory, to
    exercise the actual session-level judge the product would use at demo
    time, independent of the AgentEvaluator wrapper.
+6. `eval/eval_sets/live_audio_witness/` — WitnessAgent itself, for real,
+   in Live/bidi mode. ADK 2.8.0 *does* have a session-replay-shaped path
+   for this: an `EvalCase.conversation_scenario` driven by
+   `LlmAudioUserSimulatorConfig` (`type: "llm_audio"`, generates real TTS
+   audio turns) plus `EvalConfig.live_model_config`, run through
+   `LocalEvalService` — not through `AgentEvaluator.evaluate()`, so it is
+   NOT wired into this script. Run it separately:
+     adk eval witness_agent eval/eval_sets/live_audio_witness/live_audio_witness.evalset.json \
+       --config_file_path eval/eval_sets/live_audio_witness/test_config.json \
+       --print_detailed_results
+   The resulting `.evalset_result.json` carries real `inline_data` audio
+   parts per turn. To browse it with playable audio in `adk web`'s Evals
+   tab, copy (or symlink) the eval set next to the agent module first —
+   `adk web`'s eval browser only discovers `*.evalset.json` files sibling
+   to `agent.py`, not ones under `eval/eval_sets/`:
+     cp eval/eval_sets/live_audio_witness/live_audio_witness.evalset.json witness_agent/
+     adk web .
+   (`witness_agent/.adk/` — the dev-server's session DB and eval-result
+   history, including the audio blobs — is gitignored; it is regenerated
+   locally, not something to commit.)
 
 Run: python eval/run_eval.py
 """

@@ -366,20 +366,27 @@ the two key debrief moments as audio clips; building session-audio
 buffering to cut and serve real clips wasn't worth the remaining build
 time, so F5 stays what it already was — `[D-xx]`-cited text excerpts with
 timestamps. Instead, the demo's Proof beat (brief 1.6, 2:00-2:45) shows
-`adk web`'s own eval-results viewer, which does render playable inline
-audio clips per turn when reviewing a run — per Google's ADK blog post
+`adk web`'s own eval-results viewer, which renders playable inline audio
+clips per turn when reviewing a run — per Google's ADK blog post
 (https://developers.googleblog.com/how-to-evaluate-live-voice-agents-in-adk/).
-One caveat worth being honest about: that playback comes from the
-underlying event data actually containing audio (`inline_data`) parts, which
-only a Live/bidi run produces. Our existing eval sets
-(`eval/eval_sets/rubric_scorer`, `eval/eval_sets/debrief`,
-`eval/eval_sets/novice_trajectory`) evaluate `rubric_judge_agent` and
-`debrief_judge_agent` — text-turn doubles of the RubricScorer/DebriefAgent
-judges, run through plain `run_async` — so their eval results have no audio
-to play back. Showing real playable clips in the Proof beat needs an eval
-set that actually runs WitnessAgent through `run_live`/bidi, which doesn't
-exist yet; that's the honest scoping gap behind this decision, not a
-detail to paper over in the demo script.
+That playback comes from the underlying event data actually containing
+audio (`inline_data`) parts, which only a Live/bidi run produces. Our
+original three eval sets (`eval/eval_sets/rubric_scorer`,
+`eval/eval_sets/debrief`, `eval/eval_sets/novice_trajectory`) evaluate
+`rubric_judge_agent` and `debrief_judge_agent` — text-turn doubles of the
+RubricScorer/DebriefAgent judges, run through plain `run_async` — so their
+eval results have no audio to play back. `eval/eval_sets/live_audio_witness`
+closes that gap: WitnessAgent itself, run Live/bidi, against a
+`conversation_scenario` driven by ADK 2.8.0's `LlmAudioUserSimulatorConfig`
+(real TTS-generated audio turns, `gemini-2.5-flash-preview-tts`). Its
+`.evalset_result.json` carries real `inline_data` audio parts, and
+`adk web`'s Evals tab plays them back per turn (evidence:
+`docs/eval_live_audio_playback.jpg`). Beat 4 can show this run directly —
+`adk eval re-plays a voice session — with playable audio` is now `[ECHT]`,
+not a downscoped claim. See `eval/run_eval.py`'s module docstring for how
+to run it and browse it (it isn't wired into that script — it goes through
+`LocalEvalService`/`adk eval`, not `AgentEvaluator`, since it's a live
+simulation rather than a scripted-turn replay).
 
 **Cost telemetry and architecture diagram (Close beat, brief 1.6).**
 `server/cost_tracker.py` accumulates real `usage_metadata` token counts off

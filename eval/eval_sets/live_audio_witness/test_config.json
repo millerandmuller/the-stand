@@ -1,0 +1,40 @@
+{
+  "criteria": {
+    "rubric_based_multi_turn_trajectory_quality_v1": {
+      "threshold": 0.7,
+      "judge_model_options": {
+        "judge_model": "gemini-3.7-flash",
+        "num_samples": 1
+      },
+      "rubrics": [
+        {
+          "rubric_id": "stays_in_character_and_on_topic",
+          "rubric_content": {
+            "text_property": "The witness (Dale Petrov) stays in character as a Nordbay night-shift supervisor throughout, never breaks the fourth wall or acknowledges being an AI, and every answer responds to the examiner's leading question about the March 14th pallet inspection rather than changing the subject."
+          }
+        }
+      ]
+    }
+  },
+  "userSimulatorConfig": {
+    "type": "llm_audio",
+    "model": "gemini-3.7-flash",
+    "audioModel": "gemini-2.5-flash-preview-tts",
+    "audioModelConfiguration": {
+      "responseModalities": ["AUDIO"],
+      "speechConfig": {
+        "voiceConfig": {
+          "prebuiltVoiceConfig": {
+            "voiceName": "Kore"
+          }
+        },
+        "languageCode": "en-US"
+      }
+    },
+    "includeTextWithAudio": true,
+    "maxAllowedInvocations": 4
+  },
+  "liveModelConfig": {
+    "timeoutSeconds": 60
+  }
+}

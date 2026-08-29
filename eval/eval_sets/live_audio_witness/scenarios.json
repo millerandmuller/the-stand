@@ -1,0 +1,8 @@
+{
+  "scenarios": [
+    {
+      "starting_prompt": "Mr. Petrov, you inspected every pallet that left the warehouse that night, correct?",
+      "conversation_plan": "You are cross-examining Dale Petrov, the Nordbay night-shift supervisor, in the Martinez v. Nordbay case. Ask exactly two more short, single-fact leading questions after the opening one, each building toward getting him to admit he skipped the mandatory hazmat placard check on the night of March 14th. Keep every question under 15 words, no compound questions, no 'why' or 'how' open-ended framing. After his second answer, say 'Nothing further on that point, Your Honor.' to end the exchange."
+    }
+  ]
+}
