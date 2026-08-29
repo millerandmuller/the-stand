@@ -89,6 +89,19 @@
   .case-card .witness-row .who { font-size: 12px; color: var(--text-2); }
   .case-card .witness-row .disposition { color: var(--text-5); }
 
+  /* ---------- "your case" upload card (F16) ---------- */
+  .case-card.upload-card { cursor: default; border-style: dashed; }
+  .case-card.upload-card .body { gap: 12px; }
+  .case-card.upload-card .upload-hint { font-size: 12px; line-height: 1.5; color: var(--text-4); }
+  .upload-modes { display: flex; gap: 8px; }
+  .upload-mode-btn {
+    flex: 1; padding: 8px 10px; font: inherit; font-size: 12px; color: var(--text-2);
+    background: #17181a; border: 1px solid var(--line-2); border-radius: 3px; cursor: pointer;
+  }
+  .upload-mode-btn:hover { border-color: var(--accent); color: var(--accent-hover); }
+  .upload-progress { font-size: 11.5px; color: var(--accent); min-height: 1.4em; }
+  .upload-progress.error { color: var(--red); }
+
   .start-block { display: flex; flex-direction: column; align-items: center; gap: 10px; }
   .cta {
     display: flex; align-items: center; gap: 12px; padding: 15px 42px; background: #17181a;
@@ -223,7 +236,7 @@
 <header id="caseSelectHeader">
   <div class="brand">
     <div class="name">The Stand</div>
-    <div class="sans context">Cross-examination sparring</div>
+    <div class="sans context">The room for your hardest conversations.</div>
   </div>
   <div class="disclaimer" id="disclaimer">The Stand trains technique. It does not give legal advice.</div>
 </header>
@@ -234,6 +247,7 @@
   </div>
 
   <div class="case-grid sans" id="caseGrid"></div>
+  <input type="file" id="uploadInput" accept=".pdf,.txt,application/pdf,text/plain" hidden>
 
   <div class="start-block">
     <button class="cta" id="startBtn">

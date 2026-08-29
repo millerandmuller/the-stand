@@ -12,6 +12,7 @@ const debriefHeader = document.getElementById("debriefHeader");
 const debriefView = document.getElementById("debriefView");
 
 const caseGrid = document.getElementById("caseGrid");
+const uploadInput = document.getElementById("uploadInput");
 const startBtn = document.getElementById("startBtn");
 const statusMsg = document.getElementById("statusMsg");
 const disclaimerEl = document.getElementById("disclaimer");
@@ -49,6 +50,9 @@ let clockTimer = null;
 let examinerAccum = "";
 let witnessAccum = "";
 let scoreEventLog = []; // {dxx, triggered, violation} — used to color debrief moments honestly
+let uploadModes = []; // F16: which modes the server allows Bring-Your-Own-Case for
+let pendingUploadMode = null;
+let uploading = false;
 
 function showView(name) {
   const map = {
@@ -82,9 +86,14 @@ function renderCaseGrid() {
     card.setAttribute("aria-pressed", c.case_id === selectedCaseId ? "true" : "false");
 
     const kicker = c.case_number ? `Case No. ${c.case_number} · ${c.case_type}` : c.case_type;
-    const langBadge = c.language
-      ? `<div class="badge">${c.language.code.slice(0, 2).toUpperCase()} · ${c.language.name.toUpperCase()}</div>`
-      : "";
+    let langBadge = "";
+    if (c.language) {
+      langBadge = `<div class="badge">${c.language.code.slice(0, 2).toUpperCase()} · ${c.language.name.toUpperCase()}</div>`;
+    } else if (c.case_type && c.case_type.toLowerCase().includes("defense")) {
+      langBadge = `<div class="badge">DEFENSE</div>`;
+    } else if (c.uploaded) {
+      langBadge = `<div class="badge">UPLOADED</div>`;
+    }
 
     card.innerHTML = `
       <div class="topline"></div>
@@ -107,13 +116,80 @@ function renderCaseGrid() {
     };
     caseGrid.appendChild(card);
   }
+  if (uploadModes.length) renderUploadCard();
 }
+
+// ---------- F16: Bring Your Own Case ----------
+function renderUploadCard() {
+  const card = document.createElement("div");
+  card.className = "case-card upload-card";
+  const modeLabel = { defense: "Defense", sales: "Sales" };
+  const buttons = uploadModes
+    .map((m) => `<button type="button" class="upload-mode-btn" data-mode="${m}">Upload for ${modeLabel[m] || m}</button>`)
+    .join("");
+  card.innerHTML = `
+    <div class="topline"></div>
+    <div class="body">
+      <div class="kicker-row"><div class="kicker">Your case</div></div>
+      <div class="title">Bring your own</div>
+      <div class="upload-hint">Upload a PDF or text document — your dissertation, a product briefing — and a case is generated from it in about a minute. Legal cross-exam stays fictional-only; upload works for Defense and Sales.</div>
+      <div class="upload-modes">${buttons}</div>
+      <div class="upload-progress" id="uploadProgress"></div>
+    </div>
+  `;
+  card.querySelectorAll(".upload-mode-btn").forEach((btn) => {
+    btn.onclick = () => {
+      if (uploading) return;
+      pendingUploadMode = btn.dataset.mode;
+      uploadInput.value = "";
+      uploadInput.click();
+    };
+  });
+  caseGrid.appendChild(card);
+}
+
+uploadInput.addEventListener("change", async () => {
+  const file = uploadInput.files[0];
+  const mode = pendingUploadMode;
+  if (!file || !mode) return;
+  uploading = true;
+  const progressEl = document.getElementById("uploadProgress");
+  if (progressEl) {
+    progressEl.classList.remove("error");
+    progressEl.textContent = "Reading your case…";
+  }
+  try {
+    const form = new FormData();
+    form.append("mode", mode);
+    form.append("file", file);
+    const res = await fetch("/api/cases/upload", { method: "POST", body: form });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.detail || `upload failed (${res.status})`);
+    }
+    const data = await res.json();
+    cases = [...cases, data.case];
+    selectedCaseId = data.case.case_id;
+    renderCaseGrid();
+  } catch (err) {
+    uploading = false;
+    renderCaseGrid();
+    const p = document.getElementById("uploadProgress");
+    if (p) {
+      p.classList.add("error");
+      p.textContent = "Couldn't read your case — " + (err && err.message ? err.message : err);
+    }
+    return;
+  }
+  uploading = false;
+});
 
 async function loadCases() {
   const res = await fetch("/api/cases");
   const data = await res.json();
   disclaimerEl.textContent = data.disclaimer;
   cases = data.cases;
+  uploadModes = data.upload_modes || [];
   selectedCaseId = cases[0]?.case_id || null;
   renderCaseGrid();
 }
@@ -409,7 +485,9 @@ async function beginSession() {
   }
 
   const selected = cases.find((c) => c.case_id === selectedCaseId);
-  const verb = selected && selected.case_type && selected.case_type.includes("Sparring") ? "discovery call with" : "cross-examination of";
+  const verb =
+    (selected && selected.session_verb) ||
+    (selected && selected.case_type && selected.case_type.includes("Sparring") ? "discovery call with" : "cross-examination of");
   roomContext.textContent = selected ? `${selected.case_name} · ${verb} ${selected.witness_name}` : "";
   avatarInitials.textContent = selected ? initialsFor(selected.witness_name) : "--";
 

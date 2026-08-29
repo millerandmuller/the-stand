@@ -1,8 +1,12 @@
 # The Stand
 
-Voice cross-examination trainer for junior litigators. Practice cross-examining
-a fictional witness — in real time, by voice — and get interrupted, evasive,
-in-character answers you can push back on.
+**The room for your hardest conversations.** A live-voice sparring room:
+practice a cross-examination, a B2B discovery call, or a dissertation
+defense — against a fictional, live, interruptible voice counterpart — and
+get evasive, in-character answers you can push back on. Started as a voice
+cross-examination trainer for junior litigators; the room and its rubric
+mechanism generalize to any hard, high-stakes conversation (see F7/F14-F16
+below).
 
 > The Stand trains technique. It does not give legal advice. All case files,
 > witnesses, and facts are fictional.
@@ -399,3 +403,58 @@ token-priced) get a USD estimate, computed from published pricing
 witness runs on a Live/bidi audio model Google prices per minute of audio,
 not per token, so its token counts are shown without a fabricated dollar
 figure. Architecture diagram: `docs/architecture.svg`.
+
+## New modes and Bring Your Own Case (Round 2, F14-F16)
+
+The room generalizes past cross-examination: `case_files/*.yaml` is the
+only thing that changes between a courtroom, a sales call, and a
+dissertation defense — persona, escalation ladder, and rubric, in one file,
+with the WitnessAgent/RubricScorer/DebriefAgent pipeline unchanged.
+
+**F14 — German B2B discovery call** (`case_files/discovery_call_de.yaml`,
+Britta Vogel / "Rheinwerk Logistik GmbH", fictional). Same sales rubric
+(S-01..S-04) as the English discovery case — language is a witness trait
+(F12), not a rubric translation. Functionally verified (WS session opens,
+audio flows, German `SpeechConfig.language_code` resolves); voice-quality
+QA note in `docs/DIRECTORS_NOTES.md` since no agent in this pipeline can
+hear audio.
+
+**F15 — Dissertation defense** (`case_files/dissertation_defense.yaml`).
+The "witness" is one agent voicing a two-register committee (measured
+chair + sharper external reader). Rubric citation policy per this
+project's cite-or-GAP rule: 4 of the 5 criteria are paraphrased from a
+real, fetched university dissertation-defense evaluation rubric (Andrews
+University and SMU Ph.D. Program in Clinical Psychology, both `.edu`,
+fetched and quoted 2026-08-29 — full URLs and verbatim quotes are in the
+case file's `rubric[].source` fields). The 5th criterion ("stays factual
+and composed when a question turns adversarial") has **no citable
+published rubric line** in the sources checked (Andrews, U. Rochester,
+SMU) — it's marked `"Common defense-prep practice, uncited"` in the case
+file rather than dressed up with an invented source. This is the one
+honest gap the prompt's own escape hatch anticipates.
+
+**F16 — Bring Your Own Case** (`witness_agent/case_generator.py`,
+`server/firestore_store.py`'s `UploadedCaseStore`, `POST
+/api/cases/upload`). Upload a PDF or text document in Defense or Sales
+mode only — **not** legal cross-exam, which stays fiction-only per brief
+Section 8's confidentiality principle (Rule 1.6, D-28). Generation runs
+once at upload time (never inside a live session — the leitplanken's
+latency rule), as a single `gemini-3.7-flash` call over the document
+(native PDF understanding, no separate PDF-parsing dependency), producing
+a title/summary/affidavit and 3-5 goals that must each cite a real
+page/section/quote from the document — a goal without a citation is
+dropped rather than invented. The escalation ladder, rubric, and persona
+archetype are **not** regenerated per upload; they're merged in from the
+matching curated case (`dissertation_defense.yaml` or
+`sales_discovery_call.yaml`) — the technique being trained doesn't change
+just because the source material does, and a rubric isn't something this
+project improvises per upload. Persisted in Firestore
+(`the_stand_uploaded_cases`, best-effort, same philosophy as session
+persistence) so a generated case survives a restart; an in-process cache
+keeps an upload immediately playable and listed even before/without a
+Firestore write landing. Upload capped at 20MB (`MAX_UPLOAD_BYTES`,
+`witness_agent/case_generator.py`) — comfortably under Cloud Run's 1Gi
+memory and 3600s timeout (both already set explicitly, see Deploy above),
+well within Gemini's ~1M-token input context for a bound document like a
+dissertation or product briefing. The uploaded document's full text is
+never logged — only filename/size/mode.

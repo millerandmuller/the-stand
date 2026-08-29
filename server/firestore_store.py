@@ -26,6 +26,7 @@ from google.cloud import firestore
 logger = logging.getLogger("the_stand.firestore")
 
 COLLECTION = "the_stand_sessions"
+UPLOADED_CASES_COLLECTION = "the_stand_uploaded_cases"
 
 
 class SessionStore:
@@ -83,3 +84,93 @@ class SessionStore:
             )
         except Exception as exc:
             logger.warning("Firestore save_debrief failed for %s: %s", session_id, exc)
+
+
+def _to_firestore_case(case: dict) -> dict:
+    """PyYAML parses `escalation:\n  1: ...\n  2: ...\n  3: ...` keys as
+    Python ints, but Firestore's client can't serialize a map with
+    non-string keys (`ValueError: One or more components is not a string or
+    is empty` — root-caused during this round's diff re-review: every
+    upload's Firestore write was silently failing on exactly this). Round-
+    tripped with `_from_firestore_case` below so callers (witness_agent,
+    _validate_case) keep seeing int keys, which is what
+    `witness["escalation"][escalation_level]` (an int) actually indexes."""
+    out = dict(case)
+    witness = out.get("witness")
+    if witness and isinstance(witness.get("escalation"), dict):
+        out["witness"] = {
+            **witness,
+            "escalation": {str(k): v for k, v in witness["escalation"].items()},
+        }
+    return out
+
+
+def _from_firestore_case(data: dict) -> dict:
+    witness = data.get("witness")
+    if witness and isinstance(witness.get("escalation"), dict):
+        data = {
+            **data,
+            "witness": {
+                **witness,
+                "escalation": {int(k): v for k, v in witness["escalation"].items()},
+            },
+        }
+    return data
+
+
+class UploadedCaseStore:
+    """Persists Bring-Your-Own-Case (F16) generated case files — one document
+    per uploaded case in `the_stand_uploaded_cases`, keyed by case_id, so a
+    generated case "überlebt Neustart" per the prompt's acceptance criterion.
+    Same best-effort-write philosophy as SessionStore: never raise into a
+    request path, only log. If Firestore is unavailable, uploads simply don't
+    persist across restarts (still usable within a single server lifetime via
+    the in-process cache in server/app.py).
+    """
+
+    def __init__(self, project: Optional[str] = None):
+        try:
+            self._client = firestore.AsyncClient(
+                project=project or os.environ.get("GOOGLE_CLOUD_PROJECT")
+            )
+        except Exception as exc:
+            logger.warning("Firestore client init failed, upload persistence disabled: %s", exc)
+            self._client = None
+
+    async def save_case(self, case_id: str, case: dict) -> None:
+        if not self._client:
+            return
+        try:
+            await self._client.collection(UPLOADED_CASES_COLLECTION).document(case_id).set(
+                {**_to_firestore_case(case), "created_at": datetime.now(timezone.utc)}
+            )
+        except Exception as exc:
+            logger.warning("Firestore save_case failed for %s: %s", case_id, exc)
+
+    async def list_cases(self) -> list[dict]:
+        if not self._client:
+            return []
+        try:
+            out = []
+            async for doc in self._client.collection(UPLOADED_CASES_COLLECTION).stream():
+                data = _from_firestore_case(doc.to_dict())
+                data["case_id"] = doc.id
+                out.append(data)
+            return out
+        except Exception as exc:
+            logger.warning("Firestore list_cases failed: %s", exc)
+            return []
+
+    async def get_case(self, case_id: str) -> Optional[dict]:
+        if not self._client:
+            return None
+        try:
+            doc = await self._client.collection(UPLOADED_CASES_COLLECTION).document(case_id).get()
+            if not doc.exists:
+                return None
+            data = _from_firestore_case(doc.to_dict())
+            data["case_id"] = doc.id
+            return data
+        except Exception as exc:
+            logger.warning("Firestore get_case failed for %s: %s", case_id, exc)
+            return None

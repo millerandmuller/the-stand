@@ -282,13 +282,11 @@ root_agent = Agent(
 )
 
 
-def make_agent_for_case(case_id: str):
-    """Builds a fresh (case, Agent, stage_direction_fn) triple bound to a
-    specific case file (F2). The module-level root_agent/witness_instruction
-    above stay bound to the default case for backward compatibility with the
-    M1 tests; the server (F3 sidebar + case picker) uses this factory to run
-    a session against whichever case the operator selected."""
-    case = load_case(case_id)
+def build_agent_from_case(case: dict):
+    """Builds a fresh (case, Agent, stage_direction_fn) triple bound to an
+    already-loaded, already-validated case dict — the shared path for both
+    static case files (F2) and F16's Firestore-persisted uploaded cases,
+    which never touch CASE_DIR/CASE_FILES."""
 
     def instruction(context: ReadonlyContext) -> str:
         level = _clamp_level(
@@ -349,3 +347,14 @@ def make_agent_for_case(case_id: str):
         before_model_callback=guard,
     )
     return case, agent, stage_direction
+
+
+def make_agent_for_case(case_id: str):
+    """Builds a fresh (case, Agent, stage_direction_fn) triple for a static
+    case file (F2) by id. The module-level root_agent/witness_instruction
+    above stay bound to the default case for backward compatibility with the
+    M1 tests; the server (F3 sidebar + case picker) uses this factory for
+    the shipped case_files/. Uploaded cases (F16) go through
+    build_agent_from_case directly since they're already-loaded dicts, not
+    files under CASE_DIR."""
+    return build_agent_from_case(load_case(case_id))

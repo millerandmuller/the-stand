@@ -29,13 +29,15 @@ Message contract, server -> browser:
 import asyncio
 import base64
 import json
+import logging
+import uuid
 from pathlib import Path
 
 from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).parent.parent / ".env")
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from google.adk.agents.live_request_queue import LiveRequestQueue
@@ -47,24 +49,66 @@ from google.genai import types
 from rubric_scorer.debrief import DebriefAgent
 from rubric_scorer.scorer import RubricScorer
 from server.cost_tracker import CostTracker
-from server.firestore_store import SessionStore
+from server.firestore_store import SessionStore, UploadedCaseStore
 from witness_agent.agent import (
     DISCLAIMER,
     MalformedCaseError,
     UnknownCaseError,
+    _validate_case,
+    build_agent_from_case,
     case_language_code,
     load_case,
     make_agent_for_case,
 )
+from witness_agent.case_generator import (
+    GenerationFailedError,
+    UnsupportedModeError,
+    UploadTooLargeError,
+    build_case_dict,
+    generate_case_content,
+)
 
 APP_NAME = "the_stand"
 STATIC_DIR = Path(__file__).parent / "static"
+logger = logging.getLogger("the_stand.app")
+
+# F16 mode templates: the curated escalation ladder + rubric an uploaded
+# case borrows from — never regenerated per-upload, only the persona's
+# document-specific goals/affidavit/summary are generated (see
+# witness_agent/case_generator.py). Keys are the two F16-allowed modes.
+UPLOAD_MODE_TEMPLATE_CASE_ID = {"defense": "dissertation_defense", "sales": "sales_discovery_call"}
 
 app = FastAPI()
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 session_service = InMemorySessionService()
 firestore_store = SessionStore()
+uploaded_case_store = UploadedCaseStore()
+# In-process cache so an uploaded case is immediately playable even before
+# (or if) its Firestore write lands — Firestore persistence is best-effort,
+# the in-memory cache is this server instance's source of truth for its
+# own lifetime. Cloud Run's single-instance-per-revision default for this
+# service keeps this safe for the demo; a multi-instance deploy would need
+# Firestore as the read path too (list_cases() already does this on startup
+# fallback below).
+_uploaded_cases_cache: dict[str, dict] = {}
+
+
+async def _resolve_case(case_id: str) -> dict:
+    """Loads a case dict by id from either the static case_files/ (F2) or
+    the uploaded-case store/cache (F16). Raises UnknownCaseError if neither
+    has it — same failure contract as the static-only load_case()."""
+    try:
+        return load_case(case_id)
+    except UnknownCaseError:
+        pass
+    if case_id in _uploaded_cases_cache:
+        return _uploaded_cases_cache[case_id]
+    case = await uploaded_case_store.get_case(case_id)
+    if case is None:
+        raise UnknownCaseError(f"no case file or uploaded case for case_id '{case_id}'")
+    _uploaded_cases_cache[case_id] = case
+    return case
 
 
 @app.get("/")
@@ -72,33 +116,85 @@ async def index():
     return FileResponse(STATIC_DIR / "index.html")
 
 
+def _case_summary(case_id: str, case: dict) -> dict:
+    language = case.get("language")
+    return {
+        "case_id": case_id,
+        "case_name": case["case_name"],
+        "display_name": case.get("display_name", case["case_name"]),
+        "case_number": case.get("case_number"),
+        "case_type": case.get("case_type", "Civil"),
+        "display_order": case.get("display_order", 99),
+        "card_summary": (case.get("card_summary") or case["summary"]).strip(),
+        "summary": case["summary"].strip(),
+        "witness_name": case["witness"]["name"],
+        "witness_role": case["witness"]["role"],
+        "witness_short_role": case["witness"].get("short_role", case["witness"]["role"]),
+        "witness_disposition": case["witness"].get("disposition"),
+        "language": {"code": language["code"], "name": language["name"]} if language else None,
+        "session_verb": case.get("session_verb"),
+        "uploaded": bool(case.get("uploaded")),
+    }
+
+
 @app.get("/api/cases")
 async def list_cases():
     from witness_agent.agent import CASE_FILES
 
-    out = []
-    for case_id in CASE_FILES:
-        case = load_case(case_id)
-        language = case.get("language")
-        out.append(
-            {
-                "case_id": case_id,
-                "case_name": case["case_name"],
-                "display_name": case.get("display_name", case["case_name"]),
-                "case_number": case.get("case_number"),
-                "case_type": case.get("case_type", "Civil"),
-                "display_order": case.get("display_order", 99),
-                "card_summary": (case.get("card_summary") or case["summary"]).strip(),
-                "summary": case["summary"].strip(),
-                "witness_name": case["witness"]["name"],
-                "witness_role": case["witness"]["role"],
-                "witness_short_role": case["witness"].get("short_role", case["witness"]["role"]),
-                "witness_disposition": case["witness"].get("disposition"),
-                "language": {"code": language["code"], "name": language["name"]} if language else None,
-            }
-        )
+    out = [_case_summary(case_id, load_case(case_id)) for case_id in CASE_FILES]
+
+    # F16: uploaded cases are read from Firestore on every list so a case
+    # generated by another server instance (or before a restart) still shows
+    # up — the acceptance criterion is "Fallakte überlebt Neustart". Firestore
+    # is best-effort (see firestore_store.py): if it's unavailable or the
+    # write for a case just made in THIS process hasn't landed yet, fall back
+    # to the in-process cache so an upload never silently vanishes from its
+    # own server's case grid.
+    seen_ids = set()
+    for case in await uploaded_case_store.list_cases():
+        case_id = case["case_id"]
+        seen_ids.add(case_id)
+        _uploaded_cases_cache[case_id] = case
+        out.append(_case_summary(case_id, case))
+    for case_id, case in _uploaded_cases_cache.items():
+        if case_id not in seen_ids:
+            out.append(_case_summary(case_id, case))
+
     out.sort(key=lambda c: c["display_order"])
-    return {"cases": out, "disclaimer": DISCLAIMER}
+    return {"cases": out, "disclaimer": DISCLAIMER, "upload_modes": list(UPLOAD_MODE_TEMPLATE_CASE_ID)}
+
+
+@app.post("/api/cases/upload")
+async def upload_case(mode: str = Form(...), file: UploadFile = File(...)):
+    """F16 Bring Your Own Case. Only "defense" and "sales" modes — the legal
+    cross-exam mode stays fiction-only (brief Section 8, Rule 1.6/D-28)."""
+    if mode not in UPLOAD_MODE_TEMPLATE_CASE_ID:
+        raise HTTPException(status_code=400, detail=f"mode must be one of {list(UPLOAD_MODE_TEMPLATE_CASE_ID)}")
+
+    file_bytes = await file.read()
+    mime_type = file.content_type or "application/pdf"
+    # Never log file_bytes or any generated text (leitplanken: "kein Logging
+    # des Volltexts") — filename/size/mode only.
+    logger.info("upload_case: mode=%s filename=%s bytes=%d", mode, file.filename, len(file_bytes))
+
+    try:
+        content = await generate_case_content(mode, file_bytes, mime_type)
+    except UploadTooLargeError as exc:
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
+    except UnsupportedModeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except GenerationFailedError as exc:
+        raise HTTPException(status_code=502, detail=f"couldn't read your case: {exc}") from exc
+
+    template = load_case(UPLOAD_MODE_TEMPLATE_CASE_ID[mode])
+    case_id = f"uploaded_{uuid.uuid4().hex[:10]}"
+    case = build_case_dict(mode, content, template, case_id)
+    _validate_case(case, case_id)  # same schema gate every static case file passes
+
+    _uploaded_cases_cache[case_id] = case
+    await uploaded_case_store.save_case(case_id, case)
+
+    return {"case": _case_summary(case_id, case)}
 
 
 @app.websocket("/ws/{session_id}")
@@ -127,7 +223,8 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str) -> None:
     user_id = "operator"
 
     try:
-        case, agent, stage_direction_for_level = make_agent_for_case(case_id)
+        case = await _resolve_case(case_id)
+        case, agent, stage_direction_for_level = build_agent_from_case(case)
         scorer = RubricScorer(case)
     except (UnknownCaseError, MalformedCaseError) as exc:
         await websocket.send_text(json.dumps({"type": "error", "message": str(exc)}))

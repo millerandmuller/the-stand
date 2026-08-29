@@ -2,5 +2,6 @@ google-adk[eval]==2.8.0
 pyyaml>=6.0
 python-dotenv>=1.0
 fastapi>=0.115
+python-multipart>=0.0.12
 uvicorn[standard]>=0.32
 google-cloud-firestore>=2.19
