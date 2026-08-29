@@ -52,6 +52,9 @@ function int16FromBase64(b64) {
   return new Int16Array(bytes.buffer);
 }
 
+let micChunkCount = 0;
+let micByteCount = 0;
+
 async function startMic() {
   micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
   const source = audioCtx.createMediaStreamSource(micStream);
@@ -60,6 +63,8 @@ async function startMic() {
   micNode = audioCtx.createScriptProcessor(4096, 1, 1);
   const inputRate = audioCtx.sampleRate;
   const targetRate = 16000;
+  micChunkCount = 0;
+  micByteCount = 0;
   micNode.onaudioprocess = (e) => {
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
     const input = e.inputBuffer.getChannelData(0);
@@ -71,9 +76,22 @@ async function startMic() {
       out[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
     }
     ws.send(JSON.stringify({ type: "audio", data: base64FromInt16(out) }));
+    micChunkCount++;
+    micByteCount += out.length * 2;
+    if (micChunkCount === 1 || micChunkCount % 50 === 0) {
+      console.log(`[mic] sent ${micChunkCount} chunks, ${micByteCount} bytes total (last chunk ${out.length * 2} bytes)`);
+    }
   };
   source.connect(micNode);
-  micNode.connect(audioCtx.destination === null ? audioCtx.destination : audioCtx.createGain());
+  // ScriptProcessorNode only fires onaudioprocess while its output reaches
+  // audioCtx.destination (directly or indirectly) — per the Web Audio API
+  // spec, an unconnected downstream node silently stops processing entirely.
+  // Route through a zero-gain node so we get a live graph without audible
+  // mic monitoring/feedback.
+  const silentSink = audioCtx.createGain();
+  silentSink.gain.value = 0;
+  micNode.connect(silentSink);
+  silentSink.connect(audioCtx.destination);
 }
 
 function stopMic() {

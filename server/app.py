@@ -188,6 +188,8 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str) -> None:
 
     async def upstream_task() -> None:
         nonlocal pending_examiner_text
+        audio_chunk_count = 0
+        audio_byte_count = 0
         try:
             while True:
                 raw = await websocket.receive_text()
@@ -202,6 +204,13 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str) -> None:
                         live_request_queue.send_realtime(
                             types.Blob(mime_type="audio/pcm;rate=16000", data=audio_bytes)
                         )
+                        audio_chunk_count += 1
+                        audio_byte_count += len(audio_bytes)
+                        if audio_chunk_count == 1 or audio_chunk_count % 50 == 0:
+                            print(
+                                f"[{session_id}] upstream audio: {audio_chunk_count} chunks, "
+                                f"{audio_byte_count} bytes total (last chunk {len(audio_bytes)} bytes)"
+                            )
                     elif mtype == "dial":
                         try:
                             level = int(msg.get("level", 1))
