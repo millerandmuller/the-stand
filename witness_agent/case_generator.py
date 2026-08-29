@@ -204,7 +204,17 @@ def build_case_dict(mode: str, content: GeneratedCaseContent, template: dict, ca
             "escalation": template_witness["escalation"],
         },
         "rubric": template["rubric"],
-        "language": template.get("language"),
+        # P1 fix: never persist an explicit `None` here. A generated case's
+        # dict previously carried a literal `"language": None` whenever its
+        # template had no language block, and `case_language_code()`
+        # crashed the whole session at handshake on exactly that shape
+        # (`None.get("code")`) — the bug never showed up on the raw
+        # curated case files because they simply omit the key instead of
+        # setting it to None. Falling back to the same explicit English
+        # default every curated case now declares (Lopez-shaped: code/name)
+        # closes that gap at the source, on top of case_language_code's own
+        # defensive fix.
+        "language": template.get("language") or {"code": "en-US", "name": "English"},
         "session_verb": template.get("session_verb"),
         "uploaded": True,
         "source_case_id": case_id,

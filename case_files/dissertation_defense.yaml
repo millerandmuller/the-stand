@@ -71,6 +71,18 @@ witness:
       forensic, not personal — but visibly unwilling to let a weak answer
       pass.
 
+# Explicit English default, same schema as lopez_v_meridian_construction.yaml's
+# language block (P1 fix, see witness_agent/agent.py's case_language_code
+# docstring): every case now declares its language explicitly rather than
+# relying on an absent key, so there is one shape for the server to trust.
+language:
+  code: "en-US"
+  name: "English"
+  note: >
+    Explicit English default — the committee speaks English. Declared
+    explicitly (not omitted) so this case's language field is never
+    silently None going into the Live API's SpeechConfig.
+
 rubric:
   - criterion: "Defends methodology and findings under direct, probing follow-up questions instead of retreating to a prepared summary."
     source: >

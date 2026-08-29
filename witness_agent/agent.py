@@ -128,8 +128,23 @@ def case_language_code(case: dict) -> Optional[str]:
     Read by the server to set RunConfig's SpeechConfig.language_code so the
     Live model's audio output actually comes back in that language, not just
     text described in the prompt.
+
+    Defensive on purpose (P1 fix): `case.get("language", {})` only falls
+    back to `{}` when the key is *absent*. `witness_agent/case_generator.py`
+    can produce a case dict with an explicit `"language": None` (a template
+    with no language block), and `.get("language", {})` returns that `None`
+    as-is — the next `.get("code")` then crashed the whole session at
+    handshake (ASGI exception in `server/app.py`'s `websocket_endpoint`
+    before the Live connection ever opened, no audio in either direction).
+    A falsy-but-present `language` value, or a `language` dict missing/
+    blank `code`, must resolve to the same `None` (English default) as a
+    genuinely absent field — never propagate `None`/empty into
+    `SpeechConfig.language_code`, which is what caused the Live API's
+    immediate `1008 Policy Violation` on other sessions.
     """
-    return case.get("language", {}).get("code")
+    language = case.get("language") or {}
+    code = language.get("code")
+    return code or None
 
 
 def _language_section(case: dict) -> str:
