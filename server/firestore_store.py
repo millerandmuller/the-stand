@@ -94,13 +94,26 @@ def _to_firestore_case(case: dict) -> dict:
     upload's Firestore write was silently failing on exactly this). Round-
     tripped with `_from_firestore_case` below so callers (witness_agent,
     _validate_case) keep seeing int keys, which is what
-    `witness["escalation"][escalation_level]` (an int) actually indexes."""
+    `witness["escalation"][escalation_level]` (an int) actually indexes.
+
+    F18's `reverse` block carries its own `escalation` dict with the exact
+    same int-keyed shape (see `witness_agent/case_generator.py`
+    `build_case_dict`) — found still silently failing every upload whose
+    template declares reverse mode (both current upload templates do) during
+    this round's privacy-fix verification, because this function only ever
+    converted `witness.escalation`, never `reverse.escalation`."""
     out = dict(case)
     witness = out.get("witness")
     if witness and isinstance(witness.get("escalation"), dict):
         out["witness"] = {
             **witness,
             "escalation": {str(k): v for k, v in witness["escalation"].items()},
+        }
+    reverse = out.get("reverse")
+    if reverse and isinstance(reverse.get("escalation"), dict):
+        out["reverse"] = {
+            **reverse,
+            "escalation": {str(k): v for k, v in reverse["escalation"].items()},
         }
     return out
 
@@ -113,6 +126,15 @@ def _from_firestore_case(data: dict) -> dict:
             "witness": {
                 **witness,
                 "escalation": {int(k): v for k, v in witness["escalation"].items()},
+            },
+        }
+    reverse = data.get("reverse")
+    if reverse and isinstance(reverse.get("escalation"), dict):
+        data = {
+            **data,
+            "reverse": {
+                **reverse,
+                "escalation": {int(k): v for k, v in reverse["escalation"].items()},
             },
         }
     return data

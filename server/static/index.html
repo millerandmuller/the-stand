@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <title>The Stand</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230b0c0e'/%3E%3Cpath d='M16 5v22M8 10h16M8 10l-4 8a4 4 0 0 0 8 0zM24 10l-4 8a4 4 0 0 0 8 0zM10 27h12' stroke='%23b08d57' stroke-width='1.6' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Sans:wght@400;500&display=swap">
 <style>
   :root { color-scheme: dark; }
@@ -90,7 +91,10 @@
   .case-card .witness-row .disposition { color: var(--text-5); }
 
   /* ---------- F17 briefing link / F18 reverse toggle on the card ---------- */
-  .case-card .card-actions { display: flex; align-items: center; justify-content: space-between; margin-top: 8px; gap: 8px; }
+  .case-card .card-actions { display: flex; align-items: center; justify-content: space-between; margin-top: 8px; gap: 8px; flex-wrap: wrap; }
+  .case-card .card-actions-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .reverse-toggle.disabled { cursor: default; opacity: 0.55; }
+  .reverse-toggle.disabled:hover { border-color: var(--line-2); color: var(--text-3); }
   .briefing-link {
     font: inherit; font-size: 11px; letter-spacing: 0.04em; color: var(--text-4);
     background: none; border: none; padding: 0; cursor: pointer; text-decoration: underline;
@@ -137,7 +141,11 @@
   .briefing-panel .bp-section .kicker { font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-4); margin-bottom: 6px; }
   .briefing-panel .bp-section .body-text { font-size: 14px; line-height: 1.55; color: var(--text-1); }
   .briefing-panel .bp-section .body-text.muted { color: var(--text-3); font-style: italic; }
-  .briefing-scrim { position: fixed; inset: 0; background: rgba(0,0,0,0.35); z-index: 39; }
+  /* pointer-events: none — purely a visual dimmer. A click "through" it
+     (e.g. on "Take the stand") reaches the real control underneath in one
+     click instead of being swallowed here first; dismissing the panel on
+     an outside click is handled by app.js's document-level listener. */
+  .briefing-scrim { position: fixed; inset: 0; background: rgba(0,0,0,0.35); z-index: 39; pointer-events: none; }
 
   /* ---------- "your case" upload card (F16) ---------- */
   .case-card.upload-card { cursor: default; border-style: dashed; }
@@ -161,6 +169,28 @@
   .cta .label { font-size: 19px; letter-spacing: 0.02em; }
   .start-hint { font-size: 11.5px; color: var(--text-5); }
   #statusMsg { font-size: 12px; color: var(--text-4); min-height: 1.4em; }
+  .watch-replay-btn {
+    margin-top: 6px; background: none; border: 1px solid var(--line-2); color: var(--text-3);
+    border-radius: 3px; padding: 8px 16px; font-size: 12.5px; cursor: pointer; transition: border-color 0.2s ease, color 0.2s ease;
+  }
+  .watch-replay-btn:hover { border-color: var(--accent); color: var(--text-1); }
+
+  /* ---------- replay view (F22) ---------- */
+  #replayView { flex: 1; display: flex; min-height: 0; }
+  .replay-banner {
+    position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
+    font-size: 10.5px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--accent);
+    background: var(--surface-1); border: 1px solid var(--line-2); border-radius: 20px; padding: 5px 14px;
+  }
+  .replay-controls { display: flex; align-items: center; gap: 14px; }
+  .replay-controls button {
+    background: none; border: 1px solid var(--line-2); color: var(--text-2); border-radius: 50%;
+    width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; cursor: pointer;
+  }
+  .replay-controls button:hover { border-color: var(--accent); }
+  .replay-scrubber { width: 220px; height: 3px; background: var(--line-1); border-radius: 2px; position: relative; }
+  .replay-scrubber .fill { position: absolute; left: 0; top: 0; bottom: 0; width: 0%; background: var(--accent); border-radius: 2px; }
+  .replay-time { font-size: 11px; color: var(--text-4); font-family: 'IBM Plex Sans', system-ui, sans-serif; }
 
   /* ---------- room view ---------- */
   #roomView { flex: 1; display: flex; min-height: 0; }
@@ -201,6 +231,20 @@
     padding: 0; cursor: pointer;
   }
   .dial-segments button.on { background: var(--accent); border-color: var(--accent); }
+
+  /* ---------- F19 2b: in-session refocus, same formenspache as the dial ---------- */
+  .refocus-row { display: flex; align-items: center; gap: 8px; margin-top: 2px; }
+  .refocus-row input {
+    width: 220px; font: inherit; font-size: 11.5px; background: #101113; border: 1px solid var(--line-2);
+    border-radius: 3px; padding: 6px 8px; color: var(--text-2);
+  }
+  .refocus-row input::placeholder { color: var(--text-5); }
+  .refocus-row button {
+    font-size: 10.5px; letter-spacing: 0.06em; padding: 6px 10px; border-radius: 3px;
+    border: 1px solid var(--line-2); background: #17181a; color: var(--text-3); cursor: pointer; font-family: inherit;
+  }
+  .refocus-row button:hover { border-color: var(--accent); color: var(--accent-hover); }
+  .refocus-status { font-size: 10.5px; color: var(--accent); min-height: 1.3em; }
 
   .end-btn {
     display: flex; align-items: center; gap: 9px; padding: 10px 22px; background: #17181a;
@@ -306,6 +350,7 @@
     </button>
     <div class="sans start-hint">Voice session · you can interrupt the witness at any time</div>
     <div class="sans" id="statusMsg" role="alert"></div>
+    <button class="watch-replay-btn sans" id="watchReplayBtn" type="button">Watch a replayed session</button>
   </div>
 </main>
 
@@ -324,7 +369,7 @@
     <div class="disclaimer">Trains technique. Not legal advice.</div>
   </div>
 </header>
-<main id="roomView" hidden>
+<div id="roomView" hidden>
   <div class="room-main">
     <div class="witness-block">
       <div class="avatar" id="avatarInitials">--</div>
@@ -350,6 +395,11 @@
         </div>
         <div class="end-label hostile">Hostile</div>
       </div>
+      <div class="refocus-row sans">
+        <input type="text" id="refocusInput" placeholder="Shift the pressure: e.g. Section 3">
+        <button type="button" id="refocusBtn">Shift</button>
+      </div>
+      <div class="refocus-status sans" id="refocusStatus"></div>
     </div>
 
     <button class="end-btn sans" id="endBtn">
@@ -369,7 +419,45 @@
     <div class="score-lines sans" id="scoreLines"></div>
     <div class="footer sans">Every line cites its source. Nothing is scored without one.</div>
   </aside>
-</main>
+</div>
+
+<!-- ============ F22 REPLAY (Watch a replayed session) ============ -->
+<header id="replayHeader" hidden>
+  <div class="brand">
+    <div class="name">The Stand</div>
+    <div class="sans context" id="replayContext">Martinez v. Nordbay</div>
+  </div>
+  <button class="sans" id="replayCloseBtn" type="button">Close</button>
+</header>
+<div id="replayView" hidden>
+  <div class="room-main">
+    <div class="replay-banner sans" id="replayBanner">Recorded session, re-played by adk eval</div>
+    <div class="witness-block">
+      <div class="avatar" id="replayAvatarInitials">--</div>
+      <div class="transcript" id="replayTranscript"></div>
+    </div>
+    <audio id="replayAudio" preload="auto" src="/static/replay/session_audio.wav"></audio>
+    <div class="replay-controls sans">
+      <button id="replayPlayBtn" type="button" aria-label="Play">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor"><path d="M2 1.5v11l10-5.5z"></path></svg>
+      </button>
+      <div class="replay-scrubber" id="replayScrubber"><div class="fill" id="replayScrubberFill"></div></div>
+      <div class="replay-time" id="replayTime">0:00 / 0:00</div>
+    </div>
+  </div>
+
+  <aside class="sidebar">
+    <div class="sidebar-header sans">
+      <div class="label">Rubric</div>
+      <div class="score-row">
+        <div class="score-total" id="replayScoreTotal">0</div>
+        <div class="score-scale">/ 10 · AMTA scale</div>
+      </div>
+    </div>
+    <div class="score-lines sans" id="replayScoreLines"></div>
+    <div class="footer sans">Every line cites its source. Nothing is scored without one.</div>
+  </aside>
+</div>
 
 <!-- ============ DEBRIEF ============ -->
 <header id="debriefHeader" hidden>
@@ -379,7 +467,7 @@
   </div>
   <div class="disclaimer">Trains technique. Not legal advice.</div>
 </header>
-<main id="debriefView" hidden>
+<div id="debriefView" hidden>
   <div class="debrief-inner">
     <div class="debrief-head">
       <div class="score-tile sans">
@@ -407,7 +495,7 @@
       <div>Full transcript · adk eval replay</div>
     </div>
   </div>
-</main>
+</div>
 
 <!-- ============ F17 CASE-BRIEFING PANEL ============ -->
 <div class="briefing-scrim" id="briefingScrim" hidden></div>
@@ -422,5 +510,6 @@
 </aside>
 
 <script src="/static/app.js"></script>
+<script src="/static/replay.js"></script>
 </body>
 </html>

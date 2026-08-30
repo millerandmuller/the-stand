@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Stand</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230b0c0e'/%3E%3Cpath d='M16 5v22M8 10h16M8 10l-4 8a4 4 0 0 0 8 0zM24 10l-4 8a4 4 0 0 0 8 0zM10 27h12' stroke='%23b08d57' stroke-width='1.6' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Sans:wght@400;500&display=swap">
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  :root {
+    --bg: #0b0c0e;
+    --surface-1: #131416;
+    --line-1: #232426;
+    --accent: #b08d57;
+    --accent-hover: #c9a76b;
+    --text-1: #e8e6e1;
+    --text-2: #c9c7c0;
+    --text-3: #a5a39c;
+    --text-4: #8a8880;
+  }
+  body {
+    margin: 0; min-height: 100vh; background: var(--bg); color: var(--text-1);
+    font-family: 'Cormorant Garamond', Georgia, serif;
+    display: flex; flex-direction: column; align-items: center;
+    padding: 8vh 6vw 6vh;
+  }
+  .sans { font-family: 'IBM Plex Sans', system-ui, sans-serif; }
+  .disclaimer { font-family: 'IBM Plex Sans', system-ui, sans-serif; font-size: 12px; color: var(--text-4); letter-spacing: 0.02em; }
+  main { max-width: 640px; width: 100%; display: flex; flex-direction: column; align-items: center; text-align: center; gap: 28px; }
+  h1.name { font-size: 20px; font-weight: 500; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-2); margin: 0; }
+  h2.tagline { font-size: clamp(28px, 5vw, 40px); font-weight: 500; line-height: 1.25; margin: 0; color: var(--text-1); }
+  p.explain { font-size: 17px; line-height: 1.6; color: var(--text-3); margin: 0; max-width: 52ch; }
+  .video-slot {
+    width: 100%; aspect-ratio: 16 / 9; border: 1px solid var(--line-1); border-radius: 4px;
+    background: var(--surface-1); display: flex; align-items: center; justify-content: center;
+    overflow: hidden;
+  }
+  .video-slot iframe { width: 100%; height: 100%; border: 0; display: block; }
+  .video-slot .placeholder { font-family: 'IBM Plex Sans', system-ui, sans-serif; font-size: 13px; color: var(--text-4); letter-spacing: 0.04em; }
+  .start-block { display: flex; flex-direction: column; align-items: center; gap: 10px; margin-top: 4px; }
+  button.cta {
+    display: flex; align-items: center; gap: 10px; background: var(--accent); color: #1a1408;
+    border: none; border-radius: 3px; padding: 14px 28px; font-family: 'IBM Plex Sans', system-ui, sans-serif;
+    font-size: 15px; font-weight: 500; letter-spacing: 0.01em; cursor: pointer;
+    transition: background 0.2s ease, opacity 0.2s ease;
+  }
+  button.cta:hover:not(:disabled) { background: var(--accent-hover); }
+  button.cta:disabled { background: var(--surface-1); color: var(--text-4); border: 1px solid var(--line-1); cursor: default; }
+  .status { font-family: 'IBM Plex Sans', system-ui, sans-serif; font-size: 12px; color: var(--text-4); min-height: 16px; }
+  .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-4); display: inline-block; margin-right: 6px; animation: pulse 1.6s ease-in-out infinite; }
+  .dot.ready { background: var(--accent); animation: none; }
+  @keyframes pulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }
+  footer { margin-top: auto; padding-top: 40px; }
+</style>
+</head>
+<body>
+
+<main>
+  <h1 class="name">The Stand</h1>
+  <h2 class="tagline">A hundred courtrooms before your first real one.</h2>
+  <p class="explain">
+    The Stand is a live-voice sparring room: you cross-examine a fictional,
+    interruptible witness by speaking, and a rubric sidebar scores every
+    question against a published ballot as you go. No script, no replay of
+    canned lines — the witness answers you, in character, in real time.
+  </p>
+
+  <div class="video-slot" id="videoSlot">
+    <div class="placeholder sans" id="videoPlaceholder">Demo video — coming soon</div>
+  </div>
+
+  <div class="start-block">
+    <button class="cta" id="launchBtn" disabled>
+      <svg width="16" height="16" viewBox="0 0 18 18" fill="none" stroke="#1a1408" stroke-width="1.4"><rect x="6.5" y="1.8" width="5" height="9" rx="2.5"></rect><path d="M3.5 8.5a5.5 5.5 0 0 0 11 0"></path><path d="M9 14v2.4"></path></svg>
+      <span class="label" id="launchLabel">Waking the room…</span>
+    </button>
+    <div class="status sans" id="statusMsg"><span class="dot" id="statusDot"></span><span id="statusText">Warming up the witness — a few seconds.</span></div>
+  </div>
+
+  <div class="disclaimer">The Stand trains technique. It does not give legal advice. All case files, witnesses, and facts are fictional.</div>
+</main>
+
+<script>
+  // The app URL — real navigation only, the app never runs in an iframe here
+  // (microphone permissions in iframes are unreliable cross-browser, notably Safari).
+  const APP_URL = "https://the-stand-596357648145.europe-west1.run.app";
+
+  // Optional: set to a real YouTube embed URL once the demo video exists.
+  const VIDEO_EMBED_URL = "";
+
+  (function setupVideoSlot() {
+    if (!VIDEO_EMBED_URL) return;
+    const slot = document.getElementById("videoSlot");
+    slot.innerHTML = '<iframe src="' + VIDEO_EMBED_URL + '" title="The Stand — demo" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>';
+  })();
+
+  (function warmUpAndArmLaunch() {
+    const btn = document.getElementById("launchBtn");
+    const label = document.getElementById("launchLabel");
+    const dot = document.getElementById("statusDot");
+    const text = document.getElementById("statusText");
+    let armed = false;
+
+    function ready() {
+      if (armed) return;
+      armed = true;
+      btn.disabled = false;
+      label.textContent = "The room is ready — Take the stand.";
+      dot.classList.add("ready");
+      text.textContent = "Cross-examine live by voice.";
+    }
+
+    btn.addEventListener("click", function () {
+      window.location.href = APP_URL;
+    });
+
+    // Fire-and-forget warm-up ping. `no-cors` gives an opaque response, which
+    // is fine — we only care that the promise settles, not what it contains.
+    fetch(APP_URL + "/api/cases", { mode: "no-cors" }).then(ready).catch(ready);
+
+    // Never lock a juror out: arm the button unconditionally after 20s even
+    // if the warm-up ping never resolves.
+    setTimeout(ready, 20000);
+  })();
+</script>
+
+</body>
+</html>

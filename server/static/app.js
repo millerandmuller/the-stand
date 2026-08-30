@@ -23,6 +23,9 @@ const avatarInitials = document.getElementById("avatarInitials");
 const waveform = document.getElementById("waveform");
 const transcriptView = document.getElementById("transcriptView");
 const dialSegments = document.getElementById("dialSegments");
+const refocusInput = document.getElementById("refocusInput");
+const refocusBtn = document.getElementById("refocusBtn");
+const refocusStatus = document.getElementById("refocusStatus");
 const endBtn = document.getElementById("endBtn");
 const scoreLines = document.getElementById("scoreLines");
 const scoreTotal = document.getElementById("scoreTotal");
@@ -65,6 +68,36 @@ let pendingUploadFocus = ""; // F19
 let uploading = false;
 let reverseSelected = false; // F18: applies to the currently selectedCaseId
 let sessionReverse = false; // F18: locked in for the session in progress
+let pendingRefocusCaseId = null; // F19 2c: "Change focus" targets this existing uploaded case
+
+// ---------- P1: anonymous owner token ----------
+// An uploaded case (F16) is only ever visible to the browser that uploaded
+// it. This id is the only thing that proves ownership — server never sends
+// it back (see server/app.py _case_summary). localStorage is wrapped in
+// try/catch (private browsing, storage blocked, etc. all throw): on failure
+// the token still exists for this page load (in-memory `ownerToken`), it
+// just won't survive a reload — an accepted, documented trade-off (an
+// upload effectively "lives in the browser tab" that made it).
+let ownerToken = null;
+function getOwnerToken() {
+  if (ownerToken) return ownerToken;
+  try {
+    const stored = localStorage.getItem("the_stand_owner_token");
+    if (stored) {
+      ownerToken = stored;
+      return ownerToken;
+    }
+  } catch (err) {
+    // storage unavailable — fall through to an in-memory-only token
+  }
+  ownerToken = (crypto.randomUUID && crypto.randomUUID()) || `ot_${Math.random().toString(36).slice(2)}${Date.now()}`;
+  try {
+    localStorage.setItem("the_stand_owner_token", ownerToken);
+  } catch (err) {
+    // couldn't persist — this session still works, just won't survive reload
+  }
+  return ownerToken;
+}
 
 function showView(name) {
   const map = {
@@ -122,11 +155,20 @@ function renderCaseGrid() {
         </div>
         <div class="card-actions">
           <button type="button" class="briefing-link" data-case-id="${c.case_id}">Read the case file</button>
-          ${
-            c.reverse_available
-              ? `<button type="button" class="reverse-toggle${c.case_id === selectedCaseId && reverseSelected ? " on" : ""}" data-case-id="${c.case_id}" title="${c.reverse_short_role || "Reverse mode"}">Take the other chair</button>`
-              : ""
-          }
+          <div class="card-actions-right">
+            ${
+              c.uploaded && c.upload_mode
+                ? `<button type="button" class="briefing-link change-focus-link" data-case-id="${c.case_id}">Change focus</button>`
+                : ""
+            }
+            ${
+              c.reverse_available
+                ? `<button type="button" class="reverse-toggle${c.case_id === selectedCaseId && reverseSelected ? " on" : ""}" data-case-id="${c.case_id}" title="${c.reverse_short_role || "Reverse mode"}">Take the other chair</button>`
+                : c.uploaded
+                  ? `<span class="reverse-toggle disabled" title="This case was uploaded before reverse mode — re-upload it to unlock the other chair">re-upload to unlock the other chair</span>`
+                  : ""
+            }
+          </div>
         </div>
       </div>
     `;
@@ -136,11 +178,18 @@ function renderCaseGrid() {
       selectedCaseId = c.case_id;
       renderCaseGrid();
     };
-    card.querySelector(".briefing-link").onclick = (e) => {
+    card.querySelector(".briefing-link:not(.change-focus-link)").onclick = (e) => {
       e.stopPropagation();
       openBriefing(c.case_id, c.case_id === selectedCaseId && reverseSelected ? "reverse" : "examiner");
     };
-    const reverseBtn = card.querySelector(".reverse-toggle");
+    const changeFocusBtn = card.querySelector(".change-focus-link");
+    if (changeFocusBtn) {
+      changeFocusBtn.onclick = (e) => {
+        e.stopPropagation();
+        beginChangeFocus(c.case_id);
+      };
+    }
+    const reverseBtn = card.querySelector(".reverse-toggle:not(.disabled)");
     if (reverseBtn) {
       reverseBtn.onclick = (e) => {
         e.stopPropagation();
@@ -164,7 +213,9 @@ async function openBriefing(caseId, role) {
   briefingScrim.hidden = false;
   briefingBody.innerHTML = `<div class="body-text muted">Loading…</div>`;
   try {
-    const res = await fetch(`/api/cases/${encodeURIComponent(caseId)}/briefing?role=${role === "reverse" ? "reverse" : "examiner"}`);
+    const res = await fetch(`/api/cases/${encodeURIComponent(caseId)}/briefing?role=${role === "reverse" ? "reverse" : "examiner"}`, {
+      headers: { "X-Owner-Token": getOwnerToken() },
+    });
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
       throw new Error(body.detail || `couldn't load the briefing (${res.status})`);
@@ -191,7 +242,20 @@ function closeBriefing() {
 }
 
 briefingClose.onclick = closeBriefing;
-briefingScrim.onclick = closeBriefing;
+// The scrim used to be a full-viewport click target (position:fixed,
+// inset:0) that ate every click while the panel was open, including on
+// "Take the stand" underneath it — a click there silently closed the panel
+// instead of starting the session, needing a second click. Found during
+// this round's demo rehearsal (directly threatens the Oh!-Moment beat).
+// Fixed by making the scrim purely visual (pointer-events: none in
+// index.html) and closing on a document-level "click outside the panel"
+// listener instead, so a click on any real control (startBtn included)
+// reaches it in the same click that dismisses the panel.
+document.addEventListener("click", (e) => {
+  if (!briefingPanel.classList.contains("open")) return;
+  if (briefingPanel.contains(e.target) || e.target.closest("#briefingToggle") || e.target.closest(".briefing-link")) return;
+  closeBriefing();
+});
 briefingToggle.onclick = () => {
   if (briefingPanel.classList.contains("open")) {
     closeBriefing();
@@ -201,6 +265,8 @@ briefingToggle.onclick = () => {
 };
 
 // ---------- F16: Bring Your Own Case ----------
+let pendingUploadFile = null; // set once a file is chosen, cleared once the focus step resolves
+
 function renderUploadCard() {
   const card = document.createElement("div");
   card.className = "case-card upload-card";
@@ -214,7 +280,6 @@ function renderUploadCard() {
       <div class="kicker-row"><div class="kicker">Your case</div></div>
       <div class="title">Bring your own</div>
       <div class="upload-hint">Upload a PDF or text document — your dissertation, a product briefing — and a case is generated from it in about a minute. Legal cross-exam stays fictional-only; upload works for Defense and Sales.</div>
-      <div class="upload-focus-row"><input type="text" id="uploadFocusInput" placeholder="Optional: where do you want to be grilled? (e.g. Chapter 4, methodology)"></div>
       <div class="upload-modes">${buttons}</div>
       <div class="upload-progress" id="uploadProgress"></div>
     </div>
@@ -223,8 +288,7 @@ function renderUploadCard() {
     btn.onclick = () => {
       if (uploading) return;
       pendingUploadMode = btn.dataset.mode;
-      const focusInput = document.getElementById("uploadFocusInput");
-      pendingUploadFocus = focusInput ? focusInput.value.trim() : "";
+      pendingRefocusCaseId = null;
       uploadInput.value = "";
       uploadInput.click();
     };
@@ -232,34 +296,84 @@ function renderUploadCard() {
   caseGrid.appendChild(card);
 }
 
-uploadInput.addEventListener("change", async () => {
+// F19 2a: the focus question is its own visible step, presented only after
+// a file is actually chosen — not a small optional field competing with the
+// mode buttons for attention (that's what a real user didn't notice). Still
+// entirely skippable.
+function renderFocusStep(card, { prefill = "" } = {}) {
+  card.querySelector(".body").innerHTML = `
+    <div class="kicker-row"><div class="kicker">${pendingRefocusCaseId ? "Change focus" : "Your case"}</div></div>
+    <div class="title">Where should the committee press you?</div>
+    <div class="upload-hint">e.g. "Section 3, methodology" — optional, skip if you don't have one.</div>
+    <div class="upload-focus-row"><input type="text" id="uploadFocusInput" placeholder="Optional focus area" autofocus></div>
+    <div class="upload-modes">
+      <button type="button" class="upload-mode-btn" id="uploadFocusSkip">Skip</button>
+      <button type="button" class="upload-mode-btn" id="uploadFocusGo">${pendingRefocusCaseId ? "Re-aim the committee" : "Start reading"}</button>
+    </div>
+    <div class="upload-progress" id="uploadProgress"></div>
+  `;
+  const input = card.querySelector("#uploadFocusInput");
+  input.value = prefill;
+  input.focus();
+  const go = (focus) => {
+    pendingUploadFocus = focus;
+    doUpload(card);
+  };
+  card.querySelector("#uploadFocusSkip").onclick = () => go("");
+  card.querySelector("#uploadFocusGo").onclick = () => go(input.value.trim());
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") go(input.value.trim());
+  });
+}
+
+uploadInput.addEventListener("change", () => {
   const file = uploadInput.files[0];
+  if (!file || !pendingUploadMode) return;
+  pendingUploadFile = file;
+  const card = caseGrid.querySelector(".upload-card");
+  if (card) {
+    const refocusCase = pendingRefocusCaseId ? cases.find((c) => c.case_id === pendingRefocusCaseId) : null;
+    renderFocusStep(card, { prefill: (refocusCase && refocusCase.focus) || "" });
+  }
+});
+
+async function doUpload(card) {
+  const file = pendingUploadFile;
   const mode = pendingUploadMode;
+  const refocusCaseId = pendingRefocusCaseId;
+  pendingUploadFile = null;
+  pendingRefocusCaseId = null;
   if (!file || !mode) return;
   uploading = true;
-  const progressEl = document.getElementById("uploadProgress");
+  const progressEl = card.querySelector("#uploadProgress");
   if (progressEl) {
     progressEl.classList.remove("error");
-    progressEl.textContent = "Reading your case…";
+    progressEl.textContent = refocusCaseId ? "Re-reading your case with the new focus…" : "Reading your case…";
   }
   try {
     const form = new FormData();
     form.append("mode", mode);
     form.append("file", file);
+    form.append("owner_token", getOwnerToken());
     if (pendingUploadFocus) form.append("focus", pendingUploadFocus);
+    if (refocusCaseId) form.append("case_id", refocusCaseId);
     const res = await fetch("/api/cases/upload", { method: "POST", body: form });
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
       throw new Error(body.detail || `upload failed (${res.status})`);
     }
     const data = await res.json();
-    cases = [...cases, data.case];
+    if (refocusCaseId) {
+      cases = cases.map((c) => (c.case_id === data.case.case_id ? data.case : c));
+    } else {
+      cases = [...cases, data.case];
+    }
     selectedCaseId = data.case.case_id;
     renderCaseGrid();
   } catch (err) {
     uploading = false;
     renderCaseGrid();
-    const p = document.getElementById("uploadProgress");
+    const p = caseGrid.querySelector(".upload-card #uploadProgress");
     if (p) {
       p.classList.add("error");
       p.textContent = "Couldn't read your case — " + (err && err.message ? err.message : err);
@@ -267,10 +381,23 @@ uploadInput.addEventListener("change", async () => {
     return;
   }
   uploading = false;
-});
+}
+
+// ---------- F19 2c: change focus on an existing uploaded case ----------
+// Document text is never stored server-side, so "changing focus" means
+// re-attaching the file — honest re-generation, not a hidden store.
+function beginChangeFocus(caseId) {
+  if (uploading) return;
+  const c = cases.find((x) => x.case_id === caseId);
+  if (!c || !c.uploaded || !c.upload_mode) return;
+  pendingUploadMode = c.upload_mode;
+  pendingRefocusCaseId = caseId;
+  uploadInput.value = "";
+  uploadInput.click();
+}
 
 async function loadCases() {
-  const res = await fetch("/api/cases");
+  const res = await fetch("/api/cases", { headers: { "X-Owner-Token": getOwnerToken() } });
   const data = await res.json();
   disclaimerEl.textContent = data.disclaimer;
   cases = data.cases;
@@ -428,7 +555,7 @@ function renderDebrief(d) {
 
   debriefScore.innerHTML = `${d.amta_score}<span class="scale"> / 10</span>`;
   debriefHeadline.textContent = d.headline;
-  debriefFocus.textContent = "";
+  debriefFocus.textContent = d.focus ? `You asked to be pressed on: ${d.focus}` : "";
 
   debriefMoments.innerHTML = "";
   for (const m of d.moments || []) {
@@ -491,6 +618,7 @@ function connectWS() {
           case_id: selectedCaseId,
           pressure_level: currentDialLevel,
           role: sessionReverse ? "reverse" : "examiner",
+          owner_token: getOwnerToken(),
         })
       );
       resolve();
@@ -518,6 +646,9 @@ function connectWS() {
         msg.events.forEach(addScoreLine);
       } else if (msg.type === "debrief") {
         renderDebrief(msg);
+      } else if (msg.type === "focus") {
+        // F19 2b: server confirms the mid-session shift actually applied.
+        refocusStatus.textContent = `Pressing on: ${msg.focus}`;
       } else if (msg.type === "error") {
         showStatus("Room error: " + msg.message);
       }
@@ -549,6 +680,19 @@ dialSegments.addEventListener("click", (e) => {
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type: "dial", level: currentDialLevel }));
   }
+});
+
+// ---------- F19 2b: in-session refocus ----------
+function sendRefocus() {
+  const focus = refocusInput.value.trim();
+  if (!focus || !ws || ws.readyState !== WebSocket.OPEN) return;
+  ws.send(JSON.stringify({ type: "refocus", focus }));
+  refocusStatus.textContent = "Shifting…";
+  refocusInput.value = "";
+}
+refocusBtn.onclick = sendRefocus;
+refocusInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") sendRefocus();
 });
 
 // ---------- start / end ----------
@@ -609,6 +753,8 @@ async function beginSession() {
   transcriptView.innerHTML = "";
   currentDialLevel = 1;
   renderDial();
+  refocusInput.value = "";
+  refocusStatus.textContent = "";
 
   sessionStartMs = Date.now();
   tickClock();

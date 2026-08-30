@@ -11,9 +11,10 @@ raw `Event` dumps, so the browser only has to understand messages the UI
 actually needs (audio, transcript, score, dial, debrief).
 
 Message contract, browser -> server (JSON text frames on /ws/{session_id}):
-  {"type": "start", "case_id": "martinez_v_nordbay", "pressure_level": 1}
+  {"type": "start", "case_id": "martinez_v_nordbay", "pressure_level": 1, "owner_token": "<uuid, required for uploaded cases>"}
   {"type": "audio", "data": "<base64 pcm16 @16kHz>"}
   {"type": "dial", "level": 1|2|3}
+  {"type": "refocus", "focus": "Section 3, methodology"}  -- F19 2b: mid-session focus shift
   {"type": "end_session"}
 
 Message contract, server -> browser:
@@ -22,8 +23,15 @@ Message contract, server -> browser:
   {"type": "interrupted"}  -- forwards the Live API's real LlmResponse.interrupted
                               signal (genuine barge-in, not a UI guess)
   {"type": "score", "events": [{"criterion","dxx","triggered","violation","note","score_delta"}]}
+  {"type": "focus", "focus": "..."}  -- confirms a "refocus" message was applied
   {"type": "debrief", "amta_score": int, "headline": "...", "moments": [...], "practice_focus": "...", "cost": {...}}
   {"type": "error", "message": "..."}
+
+P1 privacy: an uploaded case (F16) is only ever visible to the browser that
+uploaded it. The frontend mints an anonymous `owner_token` once (localStorage)
+and resends it on every /api/cases list (X-Owner-Token header), case briefing
+(X-Owner-Token header), and WS "start" message. Curated case_files/ cases have
+no owner and stay visible to everyone.
 """
 
 import asyncio
@@ -38,7 +46,7 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).parent.parent / ".env")
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from google.adk.agents.live_request_queue import LiveRequestQueue
@@ -138,6 +146,11 @@ def _case_summary(case_id: str, case: dict) -> dict:
         "language": {"code": language["code"], "name": language["name"]} if language else None,
         "session_verb": case.get("session_verb"),
         "uploaded": bool(case.get("uploaded")),
+        # F19 2c: which upload mode generated this case (defense/sales) — the
+        # only thing the "Change focus" re-attach flow needs client-side to
+        # resubmit to the same template. Owner-scoped like everything else
+        # about an uploaded case; never present on curated cases.
+        "upload_mode": case.get("upload_mode"),
         # F17
         "user_role": case.get("user_role"),
         # F19
@@ -200,7 +213,7 @@ MAX_UPLOADED_CASES_SHOWN = 6
 
 
 @app.get("/api/cases")
-async def list_cases():
+async def list_cases(x_owner_token: str = Header(None)):
     from witness_agent.agent import CASE_FILES
 
     out = [_case_summary(case_id, load_case(case_id)) for case_id in CASE_FILES]
@@ -212,6 +225,12 @@ async def list_cases():
     # write for a case just made in THIS process hasn't landed yet, fall back
     # to the in-process cache so an upload never silently vanishes from its
     # own server's case grid.
+    #
+    # P1 privacy fix: an uploaded case only ever appears for the client that
+    # owns it — its `owner_token` (see upload_case) must match the caller's
+    # `X-Owner-Token` header exactly. A case with no owner_token (only
+    # possible from before this fix) is never shown to anyone rather than
+    # falling back to the old "visible to every visitor" behavior.
     now = datetime.now(timezone.utc)
     uploaded: list[tuple[datetime, dict]] = []
     seen_ids = set()
@@ -219,9 +238,13 @@ async def list_cases():
         case_id = case["case_id"]
         seen_ids.add(case_id)
         _uploaded_cases_cache[case_id] = case
+        if not x_owner_token or case.get("owner_token") != x_owner_token:
+            continue
         uploaded.append((case.get("created_at") or now, _case_summary(case_id, case)))
     for case_id, case in _uploaded_cases_cache.items():
         if case_id not in seen_ids:
+            if not x_owner_token or case.get("owner_token") != x_owner_token:
+                continue
             # Cache-only entries were created within this process's lifetime
             # (i.e. very recently) and Firestore hasn't caught up yet — treat
             # as newest so they never disappear behind the cap.
@@ -235,24 +258,53 @@ async def list_cases():
 
 
 @app.post("/api/cases/upload")
-async def upload_case(mode: str = Form(...), file: UploadFile = File(...), focus: str = Form(None)):
+async def upload_case(
+    mode: str = Form(...),
+    file: UploadFile = File(...),
+    focus: str = Form(None),
+    owner_token: str = Form(None),
+    case_id: str = Form(None),
+):
     """F16 Bring Your Own Case. Only "defense" and "sales" modes — the legal
     cross-exam mode stays fiction-only (brief Section 8, Rule 1.6/D-28).
 
     F19: optional `focus` form field — where the user wants to be grilled
     (e.g. "Chapter 4, methodology"). Passed through to generation so the
     goals anchor on that section; cite-or-GAP if the document doesn't
-    support it (see `content.focus_note`, carried onto the case)."""
+    support it (see `content.focus_note`, carried onto the case).
+
+    P1: `owner_token` is required — a per-browser anonymous id the frontend
+    mints once (localStorage) and resends on every upload/list/session-start.
+    It becomes the case's visibility key (see list_cases/websocket_endpoint)
+    and is never echoed back in `_case_summary`.
+
+    F19 2c: an optional `case_id` re-attaches a document to an *existing*
+    uploaded case (re-generating its cited attack lines with a new focus)
+    instead of minting a new one — the "Change focus" flow. Requires the
+    caller's `owner_token` to match the existing case's owner."""
     if mode not in UPLOAD_MODE_TEMPLATE_CASE_ID:
         raise HTTPException(status_code=400, detail=f"mode must be one of {list(UPLOAD_MODE_TEMPLATE_CASE_ID)}")
+    owner_token = (owner_token or "").strip()
+    if not owner_token:
+        raise HTTPException(status_code=400, detail="owner_token is required")
+
+    target_case_id = None
+    if case_id:
+        try:
+            existing = await _resolve_case(case_id)
+        except UnknownCaseError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        if not existing.get("uploaded") or existing.get("owner_token") != owner_token:
+            raise HTTPException(status_code=403, detail="not the owner of this case")
+        target_case_id = case_id
 
     file_bytes = await file.read()
     mime_type = file.content_type or "application/pdf"
     # Never log file_bytes or any generated text (leitplanken: "kein Logging
     # des Volltexts") — filename/size/mode/focus only.
     logger.info(
-        "upload_case: mode=%s filename=%s bytes=%d focus_set=%s",
-        mode, file.filename, len(file_bytes), bool((focus or "").strip()),
+        "upload_case: mode=%s filename=%s bytes=%d focus_set=%s refocus=%s",
+        mode, file.filename, len(file_bytes), bool((focus or "").strip()), bool(target_case_id),
     )
 
     try:
@@ -265,26 +317,35 @@ async def upload_case(mode: str = Form(...), file: UploadFile = File(...), focus
         raise HTTPException(status_code=502, detail=f"couldn't read your case: {exc}") from exc
 
     template = load_case(UPLOAD_MODE_TEMPLATE_CASE_ID[mode])
-    case_id = f"uploaded_{uuid.uuid4().hex[:10]}"
-    case = build_case_dict(mode, content, template, case_id, focus=focus)
-    _validate_case(case, case_id)  # same schema gate every static case file passes
+    case_id_out = target_case_id or f"uploaded_{uuid.uuid4().hex[:10]}"
+    case = build_case_dict(mode, content, template, case_id_out, focus=focus)
+    _validate_case(case, case_id_out)  # same schema gate every static case file passes
+    case["owner_token"] = owner_token
+    case["upload_mode"] = mode
 
-    _uploaded_cases_cache[case_id] = case
-    await uploaded_case_store.save_case(case_id, case)
+    _uploaded_cases_cache[case_id_out] = case
+    await uploaded_case_store.save_case(case_id_out, case)
 
-    return {"case": _case_summary(case_id, case)}
+    return {"case": _case_summary(case_id_out, case)}
 
 
 @app.get("/api/cases/{case_id}/briefing")
-async def case_briefing(case_id: str, role: str = "examiner"):
+async def case_briefing(case_id: str, role: str = "examiner", x_owner_token: str = Header(None)):
     """F17 Case-Briefing-Panel: read-only case context (parties, the user's
     own role, counterpart profile, affidavit summary, focus). Never includes
     hidden goals/strategy — see `_case_briefing` docstring. Available before
-    a session starts (case-selection card) and during it (header toggle)."""
+    a session starts (case-selection card) and during it (header toggle).
+
+    P1: an uploaded case's briefing is only readable by its owner (same
+    `X-Owner-Token` check as list_cases/websocket_endpoint) — same 404 as an
+    unknown case_id, so a guessed id can't be distinguished from a
+    nonexistent one."""
     try:
         case = await _resolve_case(case_id)
     except UnknownCaseError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if case.get("uploaded") and (not x_owner_token or case.get("owner_token") != x_owner_token):
+        raise HTTPException(status_code=404, detail=f"no case file or uploaded case for case_id '{case_id}'")
     try:
         return _case_briefing(case_id, case, role)
     except ReverseNotAvailableError as exc:
@@ -319,9 +380,17 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str) -> None:
     # the witness. Anything other than the literal "reverse" stays forward
     # mode (the default, same as before this field existed).
     reverse = first.get("role") == "reverse"
+    # P1: same owner check as list_cases/case_briefing, carried over the
+    # "start" message since a WS handshake has no header/query param a
+    # browser fetch would use. A guessed uploaded case_id without the
+    # matching token gets the same "unknown case" error a made-up id would
+    # — no distinct "found but not yours" signal.
+    owner_token = first.get("owner_token")
 
     try:
         case = await _resolve_case(case_id)
+        if case.get("uploaded") and (not owner_token or case.get("owner_token") != owner_token):
+            raise UnknownCaseError(f"no case file or uploaded case for case_id '{case_id}'")
         case, agent, stage_direction_for_level = build_agent_from_case(case, reverse=reverse)
         scorer = RubricScorer(case, reverse=reverse)
     except (UnknownCaseError, MalformedCaseError, ReverseNotAvailableError) as exc:
@@ -381,6 +450,11 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str) -> None:
     pending_examiner_text = ""
     current_witness_text = ""
     cost_tracker = CostTracker()
+    # F19 2b: starts as the case's upload-time focus (if any) and can be
+    # shifted live via a "refocus" message — carried into the RubricScorer's
+    # context and reflected back in the debrief so both stay honest about
+    # what the operator actually asked to be pressed on this session.
+    active_focus = case.get("focus")
 
     async def score_and_emit(examiner_q: str, witness_a: str) -> None:
         if not examiner_q.strip() or not witness_a.strip():
@@ -411,7 +485,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str) -> None:
         await firestore_store.append_score_events(session_id, events_payload)
 
     async def upstream_task() -> None:
-        nonlocal pending_examiner_text
+        nonlocal pending_examiner_text, active_focus
         audio_chunk_count = 0
         audio_byte_count = 0
         try:
@@ -444,6 +518,31 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str) -> None:
                         live_request_queue.send_content(
                             types.Content(role="user", parts=[types.Part(text=direction)])
                         )
+                    elif mtype == "refocus":
+                        # F19 2b: in-session "shift the pressure" — same
+                        # send_content mechanism as the dial above, no new
+                        # codepath into the live loop and never a generation
+                        # call. Ehrlichkeitsgrenze: the stage direction is
+                        # deliberately generic (no citation claim) — if the
+                        # new focus falls outside the attack lines cited at
+                        # upload time, the witness just presses on the topic
+                        # in character, and the UI never claims a document
+                        # source for it.
+                        raw_focus = msg.get("focus")
+                        new_focus = raw_focus.strip() if isinstance(raw_focus, str) else ""
+                        if new_focus:
+                            active_focus = new_focus
+                            scorer.set_focus(new_focus)
+                            direction = (
+                                f"[STAGE DIRECTION: the examiner wants the questioning shifted — "
+                                f"press specifically on \"{new_focus}\" for the rest of this session]"
+                            )
+                            live_request_queue.send_content(
+                                types.Content(role="user", parts=[types.Part(text=direction)])
+                            )
+                            await websocket.send_text(
+                                json.dumps({"type": "focus", "focus": new_focus})
+                            )
                     elif mtype == "end_session":
                         break
                 except (json.JSONDecodeError, ValueError, TypeError) as exc:
@@ -524,7 +623,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str) -> None:
         live_request_queue.close()
         try:
             transcript = "\n".join(transcript_lines) or "(no exchanges recorded)"
-            debrief = await debrief_agent.build(transcript, scored_events, focus=case.get("focus"))
+            debrief = await debrief_agent.build(transcript, scored_events, focus=active_focus)
             cost_tracker.add_debrief(debrief.usage_metadata)
             debrief_payload = {
                 "amta_score": debrief.amta_score,
@@ -539,6 +638,11 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str) -> None:
                 ],
                 "practice_focus": debrief.practice_focus,
                 "cost": cost_tracker.as_payload(),
+                # F19 2b: the focus actually in effect at session end (the
+                # upload-time one, or whatever a mid-session refocus shifted
+                # it to) — reflected back so "You asked to be pressed on: X"
+                # is never a stale claim.
+                "focus": active_focus,
             }
             await websocket.send_text(json.dumps({"type": "debrief", **debrief_payload}))
             await firestore_store.save_debrief(session_id, debrief_payload)

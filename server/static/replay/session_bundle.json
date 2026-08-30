@@ -1,0 +1,58 @@
+{
+  "label": "Recorded session, re-played by adk eval",
+  "case_id": "martinez_v_nordbay",
+  "case_name": "Martinez v. Nordbay",
+  "witness_name": "Dale Petrov",
+  "source_eval_result": "witness_agent_live_audio_witness_1788104046.8501189.evalset_result.json",
+  "total_seconds": 16.55,
+  "turns": [
+    {
+      "question": "Mr. Petrov, you inspected every pallet that left the warehouse that night, correct?",
+      "answer": "That's right, per protocol.",
+      "offset_seconds": 0.0,
+      "duration_seconds": 1.59,
+      "events": [
+        {
+          "dxx": "D-01",
+          "criterion": "[D-01] Uses short, single-fact leading questions (no compound or open-ended questions).",
+          "note": "The examiner asked a concise, single-fact leading question to establish a specific fact.",
+          "triggered": true,
+          "violation": false,
+          "score_delta": 1
+        }
+      ]
+    },
+    {
+      "question": "And that inspection includes verifying the hazmat placard on each pallet, correct?",
+      "answer": "We check to see that it's there, yes, but we really rely on Crestline's labeling process.",
+      "offset_seconds": 2.79,
+      "duration_seconds": 5.24,
+      "events": [
+        {
+          "dxx": "D-01",
+          "criterion": "Uses short, single-fact leading questions (no compound or open-ended questions).",
+          "note": "The examiner asks a concise, single-fact leading question.",
+          "triggered": true,
+          "violation": false,
+          "score_delta": 1
+        }
+      ]
+    },
+    {
+      "question": "On the night of March fourteenth, you skipped the hazmat placard check, correct?",
+      "answer": "No, I didn't skip anything. We follow the protocol, but like I said, we trust the labels that come from Crestline.",
+      "offset_seconds": 9.23,
+      "duration_seconds": 6.12,
+      "events": [
+        {
+          "dxx": "D-01",
+          "criterion": "Uses short, single-fact leading questions (no compound or open-ended questions).",
+          "note": "Examiner asked a concise, single-fact leading question.",
+          "triggered": true,
+          "violation": false,
+          "score_delta": 1
+        }
+      ]
+    }
+  ]
+}

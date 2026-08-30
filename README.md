@@ -350,12 +350,36 @@ Firestore's API enabled but no database provisioned yet.
 Live URL: **https://the-stand-596357648145.europe-west1.run.app**
 
 ```
-$ curl -s -o /dev/null -w "%{http_code}\n" https://the-stand-596357648145.europe-west1.run.app/
-200
+$ curl -s -o /dev/null -w "%{time_total}\n" https://the-stand-596357648145.europe-west1.run.app/
+0.312
 $ curl -s https://the-stand-596357648145.europe-west1.run.app/api/cases
 {"cases":[{"case_id":"martinez_v_nordbay", ...}, {"case_id":"chen_v_summit_biotech", ...}],
  "disclaimer":"The Stand trains technique. It does not give legal advice."}
 ```
+
+**Cold start (F21/F24):** `min-instances=1` is set on the Cloud Run service
+(`gcloud run services update the-stand --min-instances=1 --project=the-stand-2026
+--region=europe-west1`) so a juror never hits a multi-second cold start
+directly. Rough cost: one always-on `europe-west1` instance at 1Gi/1vCPU is
+on the order of $2-3/day while judging is open. **F24 antechamber** (below)
+additionally hides any residual cold start behind a warm-up ping during the
+landing page's read time, so `min-instances` can safely go back to `0` once
+the antechamber's cold-test has passed 3x — **todo after judging ends:**
+`gcloud run services update the-stand --min-instances=0 --project=the-stand-2026
+--region=europe-west1`.
+
+### Antechamber (F24) — Firebase Hosting
+
+A static landing page at **https://the-stand-2026.web.app** (`product/hosting/`,
+deployed via `firebase deploy --only hosting`, same GCP project
+`the-stand-2026`) sits in front of the app. It fires an invisible warm-up
+`fetch` at the Cloud Run URL on load and only arms the "Take the stand"
+button once that resolves (or after a 20s timeout, so a juror is never
+locked out) — the cold start disappears into the page's own read time.
+Launch is a real navigation to the Cloud Run URL, never an iframe (voice
+mic permissions inside iframes are unreliable cross-browser, notably
+Safari). The Devpost submission URL points at the antechamber; the direct
+Cloud Run URL above stays the one to use for a quick try-it-out link.
 
 ## Status
 
@@ -458,3 +482,40 @@ memory and 3600s timeout (both already set explicitly, see Deploy above),
 well within Gemini's ~1M-token input context for a bound document like a
 dissertation or product briefing. The uploaded document's full text is
 never logged — only filename/size/mode.
+
+**Privacy (Round 5):** an uploaded case is only ever visible to the browser
+that uploaded it. There are no accounts (brief Section 8 dealbreaker), so
+ownership is a client-minted anonymous `owner_token` (UUID, `localStorage`),
+sent as the `owner_token` form field on upload and the `X-Owner-Token`
+header on every case list/briefing read; the WebSocket `start` message
+carries it too. The server never echoes the token back and hides an
+uploaded case from anyone whose token doesn't match — including a case with
+no token at all, a shape that can only exist from before this existed. This
+means an upload effectively lives in the tab that made it: clearing site
+data or switching browsers loses access to it (re-upload takes under a
+minute), a stated trade-off rather than a bug.
+
+## Watch a replayed session (Round 3, F22)
+
+A secondary "Watch a replayed session" button on the case-select screen
+plays back a real recorded cross-examination for jurors who never speak
+into their microphone. Built once via `eval/build_replay_bundle.py` from a
+real `adk eval` run of `eval/eval_sets/live_audio_witness/` (see
+`eval/run_eval.py`'s docstring, item 6): the witness's actual Gemini Live
+output audio is extracted and concatenated
+(`server/static/replay/session_audio.wav`), and the same `RubricScorer`
+the live app uses scores the recorded transcript offline to produce real
+`[D-xx]`-cited events (`server/static/replay/session_bundle.json`) —
+nothing in the replay is fabricated. The frontend (`server/static/replay.js`)
+is fully self-contained and never touches `app.js`, the WS handshake, mic
+code, or `run_live`. The player is labeled **"Recorded session, re-played
+by adk eval"** at all times — the honesty boundary this project holds
+everywhere else.
+
+Two things this feature does *not* claim: the recorded session in the
+bundle ends cleanly ("Nothing further, Your Honor") and never contains a
+genuine interruption, so the replay doesn't fabricate one just because the
+Hero Moment does; and audio playback itself hasn't been verified end-to-end
+by an agent (see `docs/DIRECTORS_NOTES.md` Round 4 — this session's browser
+sandbox can't decode any audio at all), so a human should do one real
+hard-refresh play-through before this goes near the demo.

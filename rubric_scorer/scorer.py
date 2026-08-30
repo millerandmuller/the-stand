@@ -166,6 +166,24 @@ class RubricScorer:
             self._system_prompt = _SYSTEM_PROMPT.format(
                 rubric_block=_rubric_block(self.rubric)
             )
+        # F19 2b: the case's upload-time focus, if any — mutable via
+        # set_focus() when the operator shifts it mid-session. Context only,
+        # never a citation source: it nudges which rubric events get judged
+        # relevant, it does not add or invent a [D-xx].
+        self.active_focus = (case.get("focus") or "").strip() or None
+
+    def set_focus(self, focus: Optional[str]) -> None:
+        self.active_focus = (focus or "").strip() or None
+
+    def _system_instruction(self) -> str:
+        if not self.active_focus:
+            return self._system_prompt
+        return (
+            f"{self._system_prompt}\n\n"
+            f'The examiner has asked to be pressed on: "{self.active_focus}". '
+            f"Use this only as context for which criteria are likely relevant — "
+            f"never force a match, and never cite it as a document source."
+        )
 
     def _contents(self, examiner_question: str, witness_answer: str) -> str:
         if self.reverse:
@@ -187,7 +205,7 @@ class RubricScorer:
             model=SCORER_MODEL,
             contents=self._contents(examiner_question, witness_answer),
             config=types.GenerateContentConfig(
-                system_instruction=self._system_prompt,
+                system_instruction=self._system_instruction(),
                 response_mime_type="application/json",
                 response_schema=_RESPONSE_SCHEMA,
                 temperature=0.1,
@@ -203,7 +221,7 @@ class RubricScorer:
             model=SCORER_MODEL,
             contents=self._contents(examiner_question, witness_answer),
             config=types.GenerateContentConfig(
-                system_instruction=self._system_prompt,
+                system_instruction=self._system_instruction(),
                 response_mime_type="application/json",
                 response_schema=_RESPONSE_SCHEMA,
                 temperature=0.1,

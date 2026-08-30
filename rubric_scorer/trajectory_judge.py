@@ -11,6 +11,7 @@ re-played die Demo-Session mit pass/fail je Kriterium" (brief F6 acceptance).
 
 import json
 import os
+import re
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -129,5 +130,19 @@ class RubricTrajectoryJudge:
             data = json.loads(text)
         except (json.JSONDecodeError, TypeError):
             return TrajectoryResult()
-        verdicts = [TrajectoryVerdict(**v) for v in data.get("verdicts", [])]
+        verdicts = []
+        for v in data.get("verdicts", []):
+            v = {**v, "dxx": _normalize_dxx(v.get("dxx", ""))}
+            verdicts.append(TrajectoryVerdict(**v))
         return TrajectoryResult(verdicts=verdicts)
+
+
+def _normalize_dxx(dxx: str) -> str:
+    """Strip bracket wrapping the judge model sometimes adds around a dxx id
+    (e.g. `[[D-01]]`, `[D-01]`), trailing punctuation (`D-01.`), and case
+    variance (`d-01`) so it matches the bare, uppercase `D-01` form used in
+    the rubric — never invent or reformat the id itself, only unwrap/normalize
+    formatting noise around it."""
+    stripped = re.sub(r"[\[\]]", "", dxx).strip()
+    stripped = stripped.rstrip(".,;:")
+    return stripped.upper()
