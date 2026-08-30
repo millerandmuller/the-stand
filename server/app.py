@@ -31,6 +31,7 @@ import base64
 import json
 import logging
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -188,6 +189,16 @@ def _case_briefing(case_id: str, case: dict, role: str) -> dict:
     }
 
 
+# Uploaded cases accumulate in Firestore across every rehearsal/test upload
+# for the life of the project and are never auto-expired (F16's own
+# acceptance criterion is that they survive a restart). Left unbounded, the
+# case-selection grid grows without limit and the curated demo cases scroll
+# out of view — this cap keeps only the most recently uploaded cases visible
+# in the grid (older ones stay in Firestore, just not rendered), so a long
+# rehearsal history can't push the Cold Open beat off-screen again.
+MAX_UPLOADED_CASES_SHOWN = 6
+
+
 @app.get("/api/cases")
 async def list_cases():
     from witness_agent.agent import CASE_FILES
@@ -201,15 +212,23 @@ async def list_cases():
     # write for a case just made in THIS process hasn't landed yet, fall back
     # to the in-process cache so an upload never silently vanishes from its
     # own server's case grid.
+    now = datetime.now(timezone.utc)
+    uploaded: list[tuple[datetime, dict]] = []
     seen_ids = set()
     for case in await uploaded_case_store.list_cases():
         case_id = case["case_id"]
         seen_ids.add(case_id)
         _uploaded_cases_cache[case_id] = case
-        out.append(_case_summary(case_id, case))
+        uploaded.append((case.get("created_at") or now, _case_summary(case_id, case)))
     for case_id, case in _uploaded_cases_cache.items():
         if case_id not in seen_ids:
-            out.append(_case_summary(case_id, case))
+            # Cache-only entries were created within this process's lifetime
+            # (i.e. very recently) and Firestore hasn't caught up yet — treat
+            # as newest so they never disappear behind the cap.
+            uploaded.append((now, _case_summary(case_id, case)))
+
+    uploaded.sort(key=lambda t: t[0], reverse=True)
+    out.extend(summary for _, summary in uploaded[:MAX_UPLOADED_CASES_SHOWN])
 
     out.sort(key=lambda c: c["display_order"])
     return {"cases": out, "disclaimer": DISCLAIMER, "upload_modes": list(UPLOAD_MODE_TEMPLATE_CASE_ID)}

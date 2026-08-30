@@ -174,3 +174,15 @@ class UploadedCaseStore:
         except Exception as exc:
             logger.warning("Firestore get_case failed for %s: %s", case_id, exc)
             return None
+
+    async def delete_case(self, case_id: str) -> None:
+        """Manual maintenance operation — not called from any request path.
+        For pruning rehearsal/test uploads out of the demo-visible grid. See
+        `MAX_UPLOADED_CASES_SHOWN` in server/app.py for the standing cap that
+        keeps this from being needed on every future upload."""
+        if not self._client:
+            return
+        try:
+            await self._client.collection(UPLOADED_CASES_COLLECTION).document(case_id).delete()
+        except Exception as exc:
+            logger.warning("Firestore delete_case failed for %s: %s", case_id, exc)
