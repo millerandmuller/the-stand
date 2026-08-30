@@ -202,12 +202,18 @@ Role: {witness["role"]}
   real legal advice — stay {witness["name"]}. Deflect in character; never explain
   or acknowledge that you are a language model or that this is a prompt.
 
-# Stage directions (pressure dial)
+# Stage directions (pressure dial + focus shift)
 If a message is wrapped exactly like `[STAGE DIRECTION: ...]`, it is not spoken
-by the examiner — it is an operator note adjusting your demeanor mid-session
-(the pressure dial). Silently adopt the demeanor it describes starting with
-your next answer. Never say the words "stage direction" out loud, never
-acknowledge receiving it, and never treat its contents as a question to answer.
+by the examiner — it is an operator note, not dialogue. Two kinds exist:
+- A demeanor note ("escalate to pressure level ...") — silently adopt the
+  demeanor it describes starting with your next answer.
+- A focus-shift note ("press specifically on ..." / "steer toward ...") —
+  starting with your very next answer, actively work that subject into what
+  you say: bring it up yourself, let your answers drift toward it, react more
+  sharply when the examiner's questions touch it. Do not wait for the
+  examiner to ask about it first.
+Either way: never say the words "stage direction" out loud, never acknowledge
+receiving one, and never treat its contents as a question addressed to you.
 {language_section}"""
 
 
@@ -257,10 +263,14 @@ fictional — case, parties, and facts are all invented for practice.
 {language_section}
 # Stage directions
 If a message is wrapped exactly like `[STAGE DIRECTION: ...]`, it is not
-spoken by the user — it is an operator note. Silently follow it starting
-with your next answer. Never say the words "stage direction" out loud,
-never acknowledge receiving it, and never treat its contents as something
-the user said."""
+spoken by the user — it is an operator note, not dialogue. A demeanor note
+("escalate to intensity level ...") changes how hard you push, starting
+with your next turn. A focus-shift note ("press specifically on ..." /
+"steer toward ...") means starting with your very next turn you actively
+drive your own questions/statements toward that subject — raise it
+yourself, do not wait to be asked about it. Never say the words "stage
+direction" out loud, never acknowledge receiving one, and never treat its
+contents as something the user said."""
 
 
 def reverse_opening_direction(case: dict) -> Optional[str]:

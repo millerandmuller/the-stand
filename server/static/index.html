@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="description" content="The day that matters is coming. Walk in rehearsed — practice the cross-examination, the defense, or the make-or-break call by voice against someone who pushes back, scored against the published ballot.">
 <title>The Stand</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230b0c0e'/%3E%3Cpath d='M16 5v22M8 10h16M8 10l-4 8a4 4 0 0 0 8 0zM24 10l-4 8a4 4 0 0 0 8 0zM10 27h12' stroke='%23b08d57' stroke-width='1.6' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Sans:wght@400;500&display=swap">
@@ -53,6 +54,18 @@
   }
   header .live .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); }
   header .right { display: flex; align-items: center; gap: 16px; }
+  .back-to-cases {
+    font: inherit; font-size: 12px; letter-spacing: 0.02em; color: var(--text-4); background: none;
+    border: none; padding: 0; cursor: pointer; margin-right: 2px;
+  }
+  .back-to-cases:hover { color: var(--accent-hover); }
+  #whisperToggle {
+    display: flex; align-items: center; gap: 7px; font: inherit; font-size: 12px; letter-spacing: 0.04em;
+    color: var(--text-4); background: #17181a; border: 1px solid var(--line-2); border-radius: 4px;
+    padding: 7px 14px; cursor: pointer;
+  }
+  #whisperToggle:hover { border-color: var(--accent); color: var(--accent-hover); }
+  #whisperToggle.on { border-color: var(--accent); background: rgba(176,141,87,0.14); color: var(--accent-hover); }
 
   /* ---------- case select view ---------- */
   #caseSelectView {
@@ -63,10 +76,20 @@
   .hero h1 { font-size: 44px; font-weight: 500; line-height: 1.15; max-width: 760px; margin: 0; }
   .hero p { font-size: 14px; color: var(--text-4); max-width: 560px; line-height: 1.5; margin: 0; }
 
+  /* ---------- case sections (Courtroom / Boardroom / Your Own Case) ---------- */
+  .case-sections { display: flex; flex-direction: column; gap: 36px; width: 100%; max-width: 1240px; }
+  .case-section-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 14px; }
+  .case-section-head .kicker {
+    font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--text-2);
+  }
+  .case-section-head .sub { font-size: 11px; color: var(--text-5); }
+
   .case-grid {
     display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 20px;
-    width: 100%; max-width: 1240px;
+    width: 100%;
   }
+  @media (max-width: 900px) { .case-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (max-width: 560px) { .case-grid { grid-template-columns: 1fr; } }
   .case-card {
     display: flex; flex-direction: column; border: 1px solid var(--line-2); border-radius: 4px;
     background: var(--surface-2); overflow: hidden; cursor: pointer; text-align: left;
@@ -219,6 +242,12 @@
   .transcript .interrupt-status {
     font-size: 11.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); min-height: 1.4em;
   }
+  /* ---------- FEATURE 2: "counsel's whisper" — a quiet aside, never a chat bubble ---------- */
+  .whisper-line {
+    max-width: 520px; text-align: center; font-size: 13px; font-style: italic; color: var(--text-4);
+    padding-top: 4px; border-top: 1px dashed var(--line-2); margin-top: 4px;
+  }
+  .whisper-line::before { content: "counsel's whisper — "; font-style: normal; color: var(--text-5); }
 
   .dial-block { display: flex; flex-direction: column; align-items: center; gap: 8px; }
   .dial-block .caption { font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-4); }
@@ -336,11 +365,24 @@
 </header>
 <main id="caseSelectView">
   <div class="hero">
-    <h1>A hundred courtrooms before your first real one.</h1>
-    <p class="sans">Pick a case file. Cross-examine a live witness by voice. Every question is scored against the published ballot.</p>
+    <h1>The day that matters is coming. Walk in rehearsed.</h1>
+    <p class="sans">The cross-examination, the defense, the make-or-break call — practice the conversation by voice, against someone who pushes back. Every line is scored against the published ballot.</p>
   </div>
 
-  <div class="case-grid sans" id="caseGrid"></div>
+  <div class="case-sections sans" id="caseSections">
+    <section class="case-section">
+      <div class="case-section-head"><span class="kicker">The Courtroom</span><span class="sub">Cross-examination · EN/ES</span></div>
+      <div class="case-grid" id="gridCourtroom"></div>
+    </section>
+    <section class="case-section">
+      <div class="case-section-head"><span class="kicker">The Boardroom</span><span class="sub">B2B discovery · EN/DE</span></div>
+      <div class="case-grid" id="gridBoardroom"></div>
+    </section>
+    <section class="case-section">
+      <div class="case-section-head"><span class="kicker">Your Own Case</span><span class="sub">Your defense, your document</span></div>
+      <div class="case-grid" id="gridOwn"></div>
+    </section>
+  </div>
   <input type="file" id="uploadInput" accept=".pdf,.txt,application/pdf,text/plain" hidden>
 
   <div class="start-block">
@@ -357,9 +399,14 @@
 <!-- ============ ROOM ============ -->
 <header id="roomHeader" hidden>
   <div class="brand">
+    <button class="sans back-to-cases" id="backToCasesBtn" type="button" aria-label="Back to all cases">← All cases</button>
     <div class="name">The Stand</div>
     <div class="sans context" id="roomContext"></div>
   </div>
+  <button class="sans" id="whisperToggle" type="button" aria-pressed="false" title="Whisper mode — a quiet suggestion of what to try next">
+    <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M2 6.5c1.5-3 7.5-3 9 0"></path><path d="M4 6.5c0-1.6 1.3-2.5 2.5-2.5S9 4.9 9 6.5"></path><circle cx="6.5" cy="9.3" r="1"></circle></svg>
+    Whisper
+  </button>
   <button class="sans" id="briefingToggle" type="button">
     <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="1.5" y="1.5" width="10" height="10" rx="1.5"></rect><path d="M4 4.5h5M4 6.7h5M4 8.9h3"></path></svg>
     Case file
@@ -382,6 +429,7 @@
         </g>
       </svg>
       <div class="transcript" id="transcriptView"></div>
+      <div class="whisper-line sans" id="whisperLine" hidden></div>
     </div>
 
     <div class="dial-block">
@@ -492,7 +540,7 @@
 
     <div class="cost-row sans">
       <div id="debriefCost"></div>
-      <div>Full transcript · adk eval replay</div>
+      <button type="button" class="watch-replay-btn" id="downloadTranscriptBtn">Download transcript</button>
     </div>
   </div>
 </div>

@@ -103,3 +103,46 @@
 - `pytest -q` — 7/7 passing, unchanged from Round 4.
 - Curated case list (6 cases), `/api/cases/{id}/briefing` for curated cases, and the F22 replay bundle were not touched by this round's diff and were re-checked after: identical behavior.
 - Deployed to Cloud Run (`the-stand`, `the-stand-2026`, `europe-west1`) and re-verified live: a token-less client sees only the 6 curated cases and gets a clean WS error on a guessed uploaded id; an uploader's own upload (with a focus set) shows up with the focus in its briefing panel and the reverse toggle, both before the session starts.
+
+# Round 6 (Real Mic-Test Findings + UI Repositioning)
+
+> Source: real microphone test 2026-08-30 evening against `the-stand-00016-hn6`, `build-prompts/fixes-mic-round-2.md` + `build-prompts/ui-repositioning.md`. Voice-pipeline server core (`run_live`, audio up/downstream, `SpeechConfig`) untouched per the fix order — every change below is in the client, the stage-direction/instruction text, or the RubricScorer prompt.
+
+## BUG 1 — In-session refocus ("Shift") not landing
+
+- Root cause was the instruction text, not the wiring: the `[STAGE DIRECTION: ...]` handling in `witness_agent/agent.py` only ever described a *demeanor* note ("adjust your pressure level"), so the model had no instruction telling it a stage direction could also mean "steer the topic" — the refocus frame reached the server and `LiveRequestQueue` correctly the whole time (confirmed via added `print(f"[{session_id}] refocus applied: ...")` diagnostic logging in `server/app.py`).
+- Fixed by generalizing the "Stage directions" section in both the forward and reverse instruction builders to name a second kind of note explicitly, and by sharpening the refocus message itself to `"starting with your very next answer, aggressively steer toward \"<focus>\" — bring it up yourself..."` (was: a softer "the examiner wants the questioning shifted — press specifically on ...").
+- UI confirmation (`refocusStatus` → "Pressing on: X") already existed from Round 5's 2b work and was left as-is — it was never the missing piece.
+- Not verified by ear this round (same category of gap as every voice-quality note above): the fix is verified at the prompt-and-wiring level (instruction text change, confirmed frame delivery via logs) and by the Examiner's synthetic-session probes. A real human re-run of the original EN/DE/reverse mic-test scenario is the next honest verification step before this goes in the demo.
+
+## BUG 2 — Doubled transcript lines
+
+- Root cause: the Live API's `output_transcription`/`input_transcription` chunks are not always pure incremental deltas — the naive `+=` concatenation in `server/app.py` could double a turn's text when a cumulative or exact-repeat chunk arrived (most visibly at turn end).
+- Fixed with a `_reconcile_transcript_chunk()` helper (`server/app.py`) that detects three cases per chunk — exact/suffix repeat (emit nothing), cumulative resend (replace, emit only the new suffix), genuine delta (append, emit as-is) — applied to both `pending_examiner_text` and `current_witness_text`. The client's own `+=` accumulation (`app.js`) needed no change once the server only ever sends genuine deltas.
+- Debrief/scorer consistency: `transcript_lines` (fed to both the `RubricScorer` and the `DebriefAgent`) is built from the same reconciled text, so the fix closes the display bug and the scoring-input bug with one change, not two.
+
+## BUG 3 — "End session" didn't silence audio immediately
+
+- Fixed client-side only (`server/static/app.js`): every scheduled `AudioBufferSourceNode` is now tracked in `activeAudioSources`; `endBtn` (and the new Back-button path) call `stopAllAudioImmediately()`, which calls `.stop()` on all of them synchronously before the `end_session` WS message is even sent. A `sessionEnded` flag also blocks any audio frame still in flight from starting playback after the click.
+
+## FEATURE 1 — Download transcript
+
+- Debrief payload (`server/app.py`) now includes the same deduplicated `transcript_lines` used for scoring, plus `role` and `case_name` — no new endpoint. Client (`app.js`) builds a Markdown file client-side (`buildTranscriptFile`/`downloadTranscript`) with case name, date, role, full transcript, every score/technique event with its `[D-xx]` citation and timestamp, and the debrief (score, moments, practice focus), triggered via a `Blob` + temporary `<a>` download.
+- **GAP (documented, not built this round):** audio download is explicitly out of scope — MediaRecorder-mixing microphone + playback into one recording is real infrastructure work, deferred to post-hackathon. The transcript download honestly covers the core need ("the discussion isn't lost") without overclaiming a recording feature that doesn't exist.
+
+## FEATURE 2 — Whisper mode
+
+- Implemented inside the existing per-exchange `RubricScorer` call — no second model call, no new live codepath. `rubric_scorer/scorer.py` adds an opt-in prompt addendum (`_WHISPER_ADDENDUM_FORWARD`/`_REVERSE`) and an optional `whisper` field on the response schema, only added to the schema when the toggle is on (`_response_schema()`), so the model isn't even asked for it when the room is silent. Toggled per-session via a new `{"type": "whisper", "enabled": bool}` WS message; the header toggle (`#whisperToggle`, next to "Case file" — position per the user's screenshot) defaults OFF every session, matching leitplanke (a).
+- Rendered as a quiet, dashed-border-topped line under the transcript with a `"counsel's whisper — "` label prefix (CSS `::before`), deliberately not a chat bubble — cleared on every new examiner turn so a whisper is never shown as stale advice for the wrong exchange.
+- **Story-Bonus:** "leads the way when you're stuck" is close to literal Collaborative-Partner-track language — a candidate sentence for the writeup/video, not yet applied there (submission-phase work).
+
+## UI — Back button + three case sections + repositioning
+
+- **Back-button fix:** a `popstate`-trapping pattern (`pushAppState()` called on load, on entering the room, and after every popstate) means Browser-Back always lands on the app's own handler instead of falling through to a blank page or leaving the SPA. The handler closes an open briefing panel first if one is open, otherwise ends the session immediately (sharing `stopAllAudioImmediately()`/`stopMic()` with the End-session button, per BUG 3) and returns to case selection. A visible "← All cases" link in the room header (`#backToCasesBtn`) calls `history.back()` — the exact same codepath as a real hardware/browser Back press, not a separate implementation.
+- **Three sections:** case cards are now routed into "The Courtroom" / "The Boardroom" / "Your Own Case" by `case_type` (`gridForCase()` in `app.js`) rather than a hardcoded id list, so a case new to a section is placed correctly without a client change next time. Dissertation Defense and all uploaded/BYOC cases (including the upload card itself) live in "Your Own Case" — the builder's call the brief left open, made for consistency (defense-flavored cases and "bring your own document" share the same "prepare your own thing" register). Mobile breakpoints added (2 columns ≤900px, 1 column ≤560px).
+- **Copy repositioning:** hero headline changed from "A hundred courtrooms before your first real one." to "The day that matters is coming. Walk in rehearsed." (Option A, per the user's decision) with the new subline, applied identically to the app's case-selection hero and the antechamber landing page (`hosting/index.html`), plus both pages' `<meta name="description">` (neither page had one before). The header tagline ("The room for your hardest conversations.") was left unchanged per instruction. Case-internal text, rubric language, and disclaimers were not touched.
+- **Submission-phase carryover:** Devpost/writeup copy has not been re-aligned to this positioning yet — that happens in `/academy-submit`. Courtroom stays the flagship story for the demo video; the new "your important day" framing is the app's front door, not a replacement for the video's narrative.
+
+## Regression (this round)
+
+- `tests/test_case_language_handshake.py` + full `pytest -q` suite, privacy-scoping (owner-token), reverse-mode toggles, briefing-panel links, and the F22 replay path are all outside this round's diff surface (server core untouched, case files untouched) — re-run and confirmed green/unchanged as part of the Examine phase below.

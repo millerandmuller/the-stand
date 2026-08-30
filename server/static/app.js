@@ -11,7 +11,9 @@ const roomView = document.getElementById("roomView");
 const debriefHeader = document.getElementById("debriefHeader");
 const debriefView = document.getElementById("debriefView");
 
-const caseGrid = document.getElementById("caseGrid");
+const gridCourtroom = document.getElementById("gridCourtroom");
+const gridBoardroom = document.getElementById("gridBoardroom");
+const gridOwn = document.getElementById("gridOwn");
 const uploadInput = document.getElementById("uploadInput");
 const startBtn = document.getElementById("startBtn");
 const statusMsg = document.getElementById("statusMsg");
@@ -27,6 +29,9 @@ const refocusInput = document.getElementById("refocusInput");
 const refocusBtn = document.getElementById("refocusBtn");
 const refocusStatus = document.getElementById("refocusStatus");
 const endBtn = document.getElementById("endBtn");
+const backToCasesBtn = document.getElementById("backToCasesBtn");
+const whisperToggle = document.getElementById("whisperToggle");
+const whisperLine = document.getElementById("whisperLine");
 const scoreLines = document.getElementById("scoreLines");
 const scoreTotal = document.getElementById("scoreTotal");
 const sidebarLabel = document.querySelector(".sidebar .sidebar-header .label");
@@ -47,6 +52,7 @@ const debriefMoments = document.getElementById("debriefMoments");
 const debriefNextRep = document.getElementById("debriefNextRep");
 const debriefCost = document.getElementById("debriefCost");
 const againBtn = document.getElementById("againBtn");
+const downloadTranscriptBtn = document.getElementById("downloadTranscriptBtn");
 
 // ---------- state ----------
 let ws = null;
@@ -69,6 +75,34 @@ let uploading = false;
 let reverseSelected = false; // F18: applies to the currently selectedCaseId
 let sessionReverse = false; // F18: locked in for the session in progress
 let pendingRefocusCaseId = null; // F19 2c: "Change focus" targets this existing uploaded case
+
+// ---------- BUG 3 / Back-fix: immediate audio silence ----------
+// Every AudioBufferSourceNode currently scheduled to play is tracked here so
+// "End session" (and Browser-Back out of the room) can stop them all in the
+// same tick instead of letting whatever's already buffered play out.
+let activeAudioSources = [];
+let sessionEnded = false; // set the instant End/Back fires; blocks any audio still in flight from playing
+
+function stopAllAudioImmediately() {
+  sessionEnded = true;
+  for (const src of activeAudioSources) {
+    try {
+      src.stop();
+    } catch (err) {
+      // already stopped/ended — fine
+    }
+  }
+  activeAudioSources = [];
+  if (audioCtx) playHead = audioCtx.currentTime;
+  waveform.classList.remove("live");
+}
+
+// ---------- FEATURE 1: last debrief, kept for "Download transcript" ----------
+let lastDebrief = null;
+let lastSessionMeta = null; // { caseName, role, startedAt }
+
+// ---------- FEATURE 2: Whisper mode ----------
+let whisperEnabled = false; // default OFF (leitplanke a) — resets every session
 
 // ---------- P1: anonymous owner token ----------
 // An uploaded case (F16) is only ever visible to the browser that uploaded
@@ -121,9 +155,22 @@ function initialsFor(name) {
     .join("");
 }
 
-// ---------- case select ----------
+// ---------- case select: three sections (Courtroom / Boardroom / Your Own Case) ----------
+// Routed by case_type rather than a hardcoded id list, so a case new to a
+// section (e.g. a future Boardroom sparring case) is placed correctly
+// without a client change. "Your Own Case" also always gets the upload card
+// (see renderUploadCard) and any uploaded case, regardless of its type.
+function gridForCase(c) {
+  const type = (c.case_type || "").toLowerCase();
+  if (c.uploaded || type.includes("defense")) return gridOwn;
+  if (type.includes("sparring")) return gridBoardroom;
+  return gridCourtroom; // Civil, Deposition, ... — the cross-examination cases
+}
+
 function renderCaseGrid() {
-  caseGrid.innerHTML = "";
+  gridCourtroom.innerHTML = "";
+  gridBoardroom.innerHTML = "";
+  gridOwn.innerHTML = "";
   for (const c of cases) {
     const card = document.createElement("button");
     card.type = "button";
@@ -202,7 +249,7 @@ function renderCaseGrid() {
         renderCaseGrid();
       };
     }
-    caseGrid.appendChild(card);
+    gridForCase(c).appendChild(card);
   }
   if (uploadModes.length) renderUploadCard();
 }
@@ -293,7 +340,7 @@ function renderUploadCard() {
       uploadInput.click();
     };
   });
-  caseGrid.appendChild(card);
+  gridOwn.appendChild(card);
 }
 
 // F19 2a: the focus question is its own visible step, presented only after
@@ -330,7 +377,7 @@ uploadInput.addEventListener("change", () => {
   const file = uploadInput.files[0];
   if (!file || !pendingUploadMode) return;
   pendingUploadFile = file;
-  const card = caseGrid.querySelector(".upload-card");
+  const card = gridOwn.querySelector(".upload-card");
   if (card) {
     const refocusCase = pendingRefocusCaseId ? cases.find((c) => c.case_id === pendingRefocusCaseId) : null;
     renderFocusStep(card, { prefill: (refocusCase && refocusCase.focus) || "" });
@@ -373,7 +420,7 @@ async function doUpload(card) {
   } catch (err) {
     uploading = false;
     renderCaseGrid();
-    const p = caseGrid.querySelector(".upload-card #uploadProgress");
+    const p = gridOwn.querySelector(".upload-card #uploadProgress");
     if (p) {
       p.classList.add("error");
       p.textContent = "Couldn't read your case — " + (err && err.message ? err.message : err);
@@ -471,6 +518,9 @@ function stopMic() {
 }
 
 function playPcm16(base64data, sampleRate = 24000) {
+  // BUG 3: audio frames already in flight when "End session" fires must
+  // never start playing — sessionEnded flips the instant that happens.
+  if (sessionEnded) return;
   const int16 = int16FromBase64(base64data);
   const float32 = new Float32Array(int16.length);
   for (let i = 0; i < int16.length; i++) float32[i] = int16[i] / 0x8000;
@@ -483,6 +533,10 @@ function playPcm16(base64data, sampleRate = 24000) {
   const startAt = Math.max(now, playHead);
   src.start(startAt);
   playHead = startAt + buffer.duration;
+  activeAudioSources.push(src);
+  src.onended = () => {
+    activeAudioSources = activeAudioSources.filter((s) => s !== src);
+  };
 }
 
 // ---------- room rendering ----------
@@ -507,6 +561,37 @@ function renderTranscript() {
 function showInterrupted() {
   const el = document.getElementById("interruptStatus");
   if (el) el.textContent = "Interrupted — witness yields";
+}
+
+// ---------- FEATURE 2: Whisper mode ("counsel's whisper") ----------
+function showWhisper(text) {
+  if (!whisperLine) return;
+  whisperLine.textContent = text || "";
+  whisperLine.hidden = !text;
+}
+
+function clearWhisper() {
+  if (whisperLine) {
+    whisperLine.textContent = "";
+    whisperLine.hidden = true;
+  }
+}
+
+function renderWhisperToggle() {
+  if (!whisperToggle) return;
+  whisperToggle.classList.toggle("on", whisperEnabled);
+  whisperToggle.setAttribute("aria-pressed", whisperEnabled ? "true" : "false");
+}
+
+if (whisperToggle) {
+  whisperToggle.onclick = () => {
+    whisperEnabled = !whisperEnabled;
+    renderWhisperToggle();
+    if (!whisperEnabled) clearWhisper();
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: "whisper", enabled: whisperEnabled }));
+    }
+  };
 }
 
 function addScoreLine(evt) {
@@ -549,6 +634,7 @@ function renderDebrief(d) {
   stopMic();
   clearInterval(clockTimer);
   showView("debrief");
+  lastDebrief = d; // FEATURE 1: kept for "Download transcript"
 
   const selected = cases.find((c) => c.case_id === selectedCaseId);
   debriefContext.textContent = `Session closed · ${selected ? selected.display_name : ""} · ${elapsedLabel().replace(":", " min ")} s`;
@@ -590,6 +676,72 @@ function renderDebrief(d) {
 
 function showStatus(text) {
   statusMsg.textContent = text;
+}
+
+// ---------- FEATURE 1: Download transcript ----------
+// Client-side Blob download — no new endpoint, everything here already lives
+// in the browser (server sent the deduplicated transcript_lines in the
+// "debrief" message, see server/app.py).
+function buildTranscriptFile(d, meta) {
+  const lines = [];
+  lines.push(`The Stand — session transcript`);
+  lines.push(`Case: ${(d && d.case_name) || (meta && meta.caseName) || "—"}`);
+  lines.push(`Date: ${new Date().toISOString()}`);
+  lines.push(`Role: ${(d && d.role) || (meta && meta.role) || "normal"}`);
+  lines.push("");
+  lines.push("## Transcript");
+  const transcriptLines = (d && d.transcript_lines) || [];
+  if (transcriptLines.length) {
+    lines.push(...transcriptLines);
+  } else {
+    lines.push("(no exchanges recorded)");
+  }
+  lines.push("");
+  lines.push("## Score / technique events");
+  if (scoreEventLog.length) {
+    for (const e of scoreEventLog) {
+      const kind = e.violation ? "violation" : e.triggered ? "triggered" : "note";
+      lines.push(`- [${e.ts}] [${e.dxx}] ${e.criterion} (${kind}) — ${e.note}`);
+    }
+  } else {
+    lines.push("(none)");
+  }
+  lines.push("");
+  lines.push("## Debrief");
+  if (d) {
+    lines.push(`AMTA score: ${d.amta_score} / 10`);
+    lines.push(d.headline || "");
+    if (d.focus) lines.push(`Requested focus: ${d.focus}`);
+    for (const m of d.moments || []) {
+      lines.push("");
+      lines.push(`Moment [${m.dxx}]: "${m.excerpt}"`);
+      lines.push(`Why it matters: ${m.why_it_matters}`);
+    }
+    lines.push("");
+    lines.push(`Practice focus: ${d.practice_focus || ""}`);
+  } else {
+    lines.push("(session not yet closed)");
+  }
+  return lines.join("\n");
+}
+
+function downloadTranscript() {
+  if (!lastDebrief) return;
+  const text = buildTranscriptFile(lastDebrief, lastSessionMeta);
+  const blob = new Blob([text], { type: "text/markdown;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  const caseSlug = ((lastDebrief.case_name || "session") + "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+  a.href = url;
+  a.download = `the-stand-${caseSlug || "session"}-transcript.md`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+if (downloadTranscriptBtn) {
+  downloadTranscriptBtn.onclick = downloadTranscript;
 }
 
 // ---------- websocket ----------
@@ -635,6 +787,7 @@ function connectWS() {
             // line so the pair always reflects the current exchange.
             witnessAccum = "";
           }
+          clearWhisper(); // FEATURE 2: a whisper is only relevant to the exchange it was suggested for
           examinerAccum += msg.text;
         } else if (msg.role === "witness") {
           witnessAccum += msg.text;
@@ -649,6 +802,8 @@ function connectWS() {
       } else if (msg.type === "focus") {
         // F19 2b: server confirms the mid-session shift actually applied.
         refocusStatus.textContent = `Pressing on: ${msg.focus}`;
+      } else if (msg.type === "whisper") {
+        showWhisper(msg.text);
       } else if (msg.type === "error") {
         showStatus("Room error: " + msg.message);
       }
@@ -756,24 +911,104 @@ async function beginSession() {
   refocusInput.value = "";
   refocusStatus.textContent = "";
 
+  // BUG 3 / Back-fix: fresh session, nothing ended yet, no audio queued.
+  sessionEnded = false;
+  activeAudioSources = [];
+  // FEATURE 2: whisper always starts OFF (leitplanke a) — re-arm the toggle
+  // with the server each session instead of carrying a stale preference.
+  whisperEnabled = false;
+  renderWhisperToggle();
+  clearWhisper();
+  lastDebrief = null;
+  lastSessionMeta = { caseName: selected ? selected.case_name : "", role: sessionReverse ? "reverse" : "normal" };
+
   sessionStartMs = Date.now();
   tickClock();
   clockTimer = setInterval(tickClock, 1000);
 
   showView("room");
+  pushAppState(); // Back-fix: a hardware/browser Back now lands on our own handler, never off the SPA
 }
 
 startBtn.onclick = beginSession;
 
-endBtn.onclick = () => {
+function endSessionNow() {
+  stopAllAudioImmediately(); // BUG 3: silence in the same tick as the click, before the network round-trip
   if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ type: "end_session" }));
+    try {
+      ws.send(JSON.stringify({ type: "end_session" }));
+    } catch (err) {
+      // socket already going away — fine, we've already gone silent
+    }
   }
   stopMic();
-};
+}
+
+endBtn.onclick = endSessionNow;
+
+// ---------- Back-fix: History API traps Browser-Back inside the SPA ----------
+// A bare click on a case card doesn't change the URL, so the only history
+// entry pushed is the one at room-entry (pushAppState() in beginSession).
+// popstate always re-pushes after handling, keeping the stack depth roughly
+// constant — Back never falls through to a real previous page / white screen.
+function pushAppState() {
+  try {
+    history.pushState({ theStand: true }, "", location.href);
+  } catch (err) {
+    // pushState unavailable (rare) — Back-fix degrades to default browser Back
+  }
+}
+
+function leaveRoomToCaseSelect() {
+  // Idempotent-safe whether called from a live room or an already-finished
+  // debrief: stopAllAudioImmediately/stopMic/ws.close are all no-ops on an
+  // already-silent/closed session.
+  endSessionNow();
+  if (ws) {
+    try {
+      ws.close();
+    } catch (err) {
+      // already closing — fine
+    }
+  }
+  clearInterval(clockTimer);
+  showStatus("");
+  showView("caseSelect");
+}
+
+window.addEventListener("popstate", () => {
+  if (briefingPanel.classList.contains("open")) {
+    closeBriefing();
+    pushAppState();
+    return;
+  }
+  if (!roomView.hidden) {
+    leaveRoomToCaseSelect();
+    pushAppState();
+    return;
+  }
+  if (!debriefView.hidden) {
+    showView("caseSelect");
+    pushAppState();
+    return;
+  }
+  // Already on case-select — re-arm so the next Back stays trapped here too.
+  pushAppState();
+});
+
+if (backToCasesBtn) {
+  // Visible "← All cases" affordance shares the exact popstate codepath —
+  // a real Back navigation and a click on this button behave identically.
+  backToCasesBtn.onclick = () => history.back();
+}
 
 againBtn.onclick = () => {
   showView("caseSelect");
+  pushAppState();
 };
 
+// Back-fix: an initial state so the very first Back press (before any
+// session has ever started) is also trapped inside the SPA, not the browser
+// history that predates this page load.
+pushAppState();
 loadCases();

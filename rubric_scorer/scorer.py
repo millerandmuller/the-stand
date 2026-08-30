@@ -52,6 +52,48 @@ _RESPONSE_SCHEMA = {
     "required": ["events"],
 }
 
+# FEATURE 2: same schema plus an optional top-level "whisper" string — not
+# in "required", so the model isn't forced to fill it (and it's simply
+# absent from the schema entirely when whisper mode is off, see
+# `_response_schema()` below).
+_RESPONSE_SCHEMA_WHISPER = {
+    **_RESPONSE_SCHEMA,
+    "properties": {**_RESPONSE_SCHEMA["properties"], "whisper": {"type": "STRING"}},
+}
+
+
+def _response_schema(whisper_enabled: bool) -> dict:
+    return _RESPONSE_SCHEMA_WHISPER if whisper_enabled else _RESPONSE_SCHEMA
+
+
+# FEATURE 2 "Whisper mode": an optional addendum appended to the active
+# system prompt when a session has the whisper toggle on. Reuses the
+# RubricScorer's existing per-exchange call (no second model call, no new
+# live codepath) — the model is simply asked to also produce one short,
+# clearly-labeled suggestion line. cite-or-GAP: phrased as a suggestion,
+# never claiming a document citation it doesn't have; left empty when the
+# model has nothing worth suggesting this exchange (never forced).
+_WHISPER_ADDENDUM_FORWARD = """
+
+# Whisper mode (active this exchange)
+Also include a "whisper" field: one short, concrete suggestion for what the
+examiner could ask or say next to make progress (e.g. "Try an open discovery
+question about her night-shift staffing"). Phrase it as a suggestion, not an
+instruction, and never claim a document citation you don't have — keep it
+generic instead of inventing one. Leave "whisper" as an empty string if
+nothing in this exchange calls for a suggestion; do not force one.
+"""
+
+_WHISPER_ADDENDUM_REVERSE = """
+
+# Whisper mode (active this exchange)
+Also include a "whisper" field: one short suggestion for how the user could
+respond to what the AI just said — name the pressure tactic the AI just used
+and suggest how to parry it (e.g. "Name the pressure tactic before responding
+to it"). Phrase it as a suggestion, not an instruction. Leave "whisper" as an
+empty string if nothing in this exchange calls for one; do not force one.
+"""
+
 _SYSTEM_PROMPT = """You are a cross-examination rubric judge for a legal training tool.
 
 You watch one examiner question and one witness answer at a time and decide
@@ -135,6 +177,7 @@ class ScoringResult:
     events: list[ScoreEvent] = field(default_factory=list)
     running_score_delta: int = 0
     usage_metadata: Optional[object] = None
+    whisper: Optional[str] = None
 
 
 class RubricScorer:
@@ -171,19 +214,27 @@ class RubricScorer:
         # never a citation source: it nudges which rubric events get judged
         # relevant, it does not add or invent a [D-xx].
         self.active_focus = (case.get("focus") or "").strip() or None
+        # FEATURE 2: default OFF — the room stays sober unless the operator
+        # opts in via the header toggle (see server/app.py "whisper" WS msg).
+        self.whisper_enabled = False
 
     def set_focus(self, focus: Optional[str]) -> None:
         self.active_focus = (focus or "").strip() or None
 
+    def set_whisper(self, enabled: bool) -> None:
+        self.whisper_enabled = bool(enabled)
+
     def _system_instruction(self) -> str:
-        if not self.active_focus:
-            return self._system_prompt
-        return (
-            f"{self._system_prompt}\n\n"
-            f'The examiner has asked to be pressed on: "{self.active_focus}". '
-            f"Use this only as context for which criteria are likely relevant — "
-            f"never force a match, and never cite it as a document source."
-        )
+        instruction = self._system_prompt
+        if self.active_focus:
+            instruction += (
+                f'\n\nThe examiner has asked to be pressed on: "{self.active_focus}". '
+                f"Use this only as context for which criteria are likely relevant — "
+                f"never force a match, and never cite it as a document source."
+            )
+        if self.whisper_enabled:
+            instruction += _WHISPER_ADDENDUM_REVERSE if self.reverse else _WHISPER_ADDENDUM_FORWARD
+        return instruction
 
     def _contents(self, examiner_question: str, witness_answer: str) -> str:
         if self.reverse:
@@ -207,7 +258,7 @@ class RubricScorer:
             config=types.GenerateContentConfig(
                 system_instruction=self._system_instruction(),
                 response_mime_type="application/json",
-                response_schema=_RESPONSE_SCHEMA,
+                response_schema=_response_schema(self.whisper_enabled),
                 temperature=0.1,
             ),
         )
@@ -223,7 +274,7 @@ class RubricScorer:
             config=types.GenerateContentConfig(
                 system_instruction=self._system_instruction(),
                 response_mime_type="application/json",
-                response_schema=_RESPONSE_SCHEMA,
+                response_schema=_response_schema(self.whisper_enabled),
                 temperature=0.1,
             ),
         )
@@ -242,4 +293,7 @@ class RubricScorer:
                 e.score_delta = 0
                 e.violation = False
         delta = sum(e.score_delta for e in events)
-        return ScoringResult(events=events, running_score_delta=delta, usage_metadata=usage_metadata)
+        whisper = (data.get("whisper") or "").strip() or None if self.whisper_enabled else None
+        return ScoringResult(
+            events=events, running_score_delta=delta, usage_metadata=usage_metadata, whisper=whisper
+        )

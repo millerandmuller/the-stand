@@ -105,6 +105,29 @@ uploaded_case_store = UploadedCaseStore()
 _uploaded_cases_cache: dict[str, dict] = {}
 
 
+def _reconcile_transcript_chunk(accumulated: str, chunk: str) -> tuple[str, str]:
+    """Merges a new input_transcription/output_transcription chunk into the
+    turn's running text and returns (new_accumulated, delta_to_send).
+
+    The Live API's transcription stream is usually incremental deltas, but it
+    can also resend a cumulative or exact-duplicate chunk (most visibly right
+    at turn end) — naively appending every chunk then doubles the on-screen
+    text AND the transcript_lines fed to the scorer/debrief (BUG 2). This
+    treats three cases: an exact/suffix repeat of what's already accumulated
+    (emit nothing), a cumulative resend that starts with what's accumulated
+    (replace, emit only the new suffix), and a genuine incremental delta
+    (append, emit the delta as-is)."""
+    if not chunk:
+        return accumulated, ""
+    if not accumulated:
+        return chunk, chunk
+    if chunk == accumulated or accumulated.endswith(chunk):
+        return accumulated, ""
+    if chunk.startswith(accumulated):
+        return chunk, chunk[len(accumulated):]
+    return accumulated + chunk, chunk
+
+
 async def _resolve_case(case_id: str) -> dict:
     """Loads a case dict by id from either the static case_files/ (F2) or
     the uploaded-case store/cache (F16). Raises UnknownCaseError if neither
@@ -467,6 +490,12 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str) -> None:
             )
             return
         cost_tracker.add_scorer(result.usage_metadata)
+        # FEATURE 2 "Whisper mode": checked before the events-empty early
+        # return below — most exchanges trigger zero rubric events but can
+        # still carry a whisper suggestion, and the whisper must not be
+        # dropped just because there was nothing to score this turn.
+        if result.whisper:
+            await websocket.send_text(json.dumps({"type": "whisper", "text": result.whisper}))
         if not result.events:
             return
         events_payload = [
@@ -534,15 +563,22 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str) -> None:
                             active_focus = new_focus
                             scorer.set_focus(new_focus)
                             direction = (
-                                f"[STAGE DIRECTION: the examiner wants the questioning shifted — "
-                                f"press specifically on \"{new_focus}\" for the rest of this session]"
+                                f"[STAGE DIRECTION: starting with your very next answer, "
+                                f"aggressively steer toward \"{new_focus}\" — bring it up "
+                                f"yourself and press on it for the rest of this session]"
                             )
                             live_request_queue.send_content(
                                 types.Content(role="user", parts=[types.Part(text=direction)])
                             )
+                            print(f"[{session_id}] refocus applied: \"{new_focus}\"")
                             await websocket.send_text(
                                 json.dumps({"type": "focus", "focus": new_focus})
                             )
+                    elif mtype == "whisper":
+                        # FEATURE 2: toggles the RubricScorer's whisper
+                        # addendum on/off for subsequent exchanges — no new
+                        # live codepath, no second model call.
+                        scorer.set_whisper(bool(msg.get("enabled")))
                     elif mtype == "end_session":
                         break
                 except (json.JSONDecodeError, ValueError, TypeError) as exc:
@@ -576,19 +612,22 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str) -> None:
                 await websocket.send_text(json.dumps({"type": "interrupted"}))
 
             if event.input_transcription and event.input_transcription.text:
-                text = event.input_transcription.text
-                pending_examiner_text += text
-                await websocket.send_text(
-                    json.dumps({"type": "transcript", "role": "examiner", "text": text, "partial": True})
+                pending_examiner_text, delta = _reconcile_transcript_chunk(
+                    pending_examiner_text, event.input_transcription.text
                 )
+                if delta:
+                    await websocket.send_text(
+                        json.dumps({"type": "transcript", "role": "examiner", "text": delta, "partial": True})
+                    )
 
             if event.output_transcription and event.output_transcription.text:
-                current_witness_text += event.output_transcription.text
-                await websocket.send_text(
-                    json.dumps(
-                        {"type": "transcript", "role": "witness", "text": event.output_transcription.text, "partial": True}
-                    )
+                current_witness_text, delta = _reconcile_transcript_chunk(
+                    current_witness_text, event.output_transcription.text
                 )
+                if delta:
+                    await websocket.send_text(
+                        json.dumps({"type": "transcript", "role": "witness", "text": delta, "partial": True})
+                    )
 
             if event.content and event.content.parts:
                 for part in event.content.parts:
@@ -643,6 +682,13 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str) -> None:
                 # it to) — reflected back so "You asked to be pressed on: X"
                 # is never a stale claim.
                 "focus": active_focus,
+                # FEATURE 1: the same deduplicated transcript_lines the scorer
+                # and this debrief were built from, handed to the client for
+                # "Download transcript" — one source of truth, so the
+                # downloaded file can never disagree with what was scored.
+                "transcript_lines": transcript_lines,
+                "role": "reverse" if reverse else "normal",
+                "case_name": case.get("case_name", case_id),
             }
             await websocket.send_text(json.dumps({"type": "debrief", **debrief_payload}))
             await firestore_store.save_debrief(session_id, debrief_payload)
