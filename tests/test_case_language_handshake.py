@@ -34,7 +34,13 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from google.genai import types
 
-from witness_agent.agent import CASE_FILES, case_language_code, load_case
+from witness_agent.agent import (
+    CASE_FILES,
+    build_agent_from_case,
+    case_language_code,
+    load_case,
+    reverse_opening_direction,
+)
 from witness_agent.case_generator import GeneratedCaseContent, build_case_dict
 
 
@@ -93,8 +99,55 @@ def test_generated_case_from_a_template_with_a_language_block_keeps_it():
     _assert_handshake_safe("regression_test_defense_upload", generated)
 
 
+def test_every_reverse_variant_survives_the_handshake():
+    # F18: reverse mode is the same case dict (same `language` block), just a
+    # different Agent/instruction — case_language_code() only reads the
+    # case-level `language` field, so it must be handshake-safe for every
+    # reverse-eligible case exactly like the forward variant is.
+    reverse_cases = [cid for cid in CASE_FILES if load_case(cid).get("reverse")]
+    assert reverse_cases, "expected at least one shipped case to declare a reverse block"
+    for case_id in reverse_cases:
+        case = load_case(case_id)
+        _assert_handshake_safe(f"{case_id} (reverse)", case)
+        # build_agent_from_case(reverse=True) must not raise, and the
+        # one-time initiative trigger must be well-formed.
+        built_case, agent, stage_direction = build_agent_from_case(case, reverse=True)
+        assert agent is not None
+        opening = reverse_opening_direction(built_case)
+        assert opening and opening.startswith("[STAGE DIRECTION:")
+        assert stage_direction(2)  # mid-session dial still works in reverse
+
+
+def test_generated_case_with_reverse_block_survives_the_handshake():
+    # F18 + F19 combined: an uploaded case built from a template that HAS a
+    # reverse scaffold (sales_discovery_call.yaml) plus non-empty
+    # reverse_goals from generation gets its own `reverse` block — must
+    # survive the same handshake as every other case.
+    template = load_case("sales_discovery_call")
+    content = GeneratedCaseContent(
+        title="Regression Test Upload With Reverse",
+        card_summary="synthetic content for the language-handshake regression test",
+        summary="synthetic content for the language-handshake regression test",
+        affidavit="synthetic content for the language-handshake regression test",
+        goals=["Ask an open-ended discovery question (p. 1)."],
+        reverse_affidavit="synthetic reverse-persona opening for the regression test",
+        reverse_goals=["Anchor high on price first (p. 2)."],
+        focus_note="no focus area was requested",
+    )
+    generated = build_case_dict(
+        "sales", content, template, case_id="regression_test_upload_reverse", focus="pricing"
+    )
+    assert generated.get("reverse") is not None
+    assert generated["focus"] == "pricing"
+    _assert_handshake_safe("regression_test_upload_reverse", generated)
+    built_case, agent, stage_direction = build_agent_from_case(generated, reverse=True)
+    assert reverse_opening_direction(built_case)
+
+
 if __name__ == "__main__":
     test_every_shipped_case_file_survives_the_handshake()
     test_generated_case_from_a_template_with_no_language_block_survives()
     test_generated_case_from_a_template_with_a_language_block_keeps_it()
-    print("PASS: all cases (shipped + generated) survive the language handshake")
+    test_every_reverse_variant_survives_the_handshake()
+    test_generated_case_with_reverse_block_survives_the_handshake()
+    print("PASS: all cases (shipped + generated + reverse) survive the language handshake")

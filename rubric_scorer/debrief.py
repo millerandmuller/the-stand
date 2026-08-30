@@ -56,6 +56,10 @@ session (each with a [D-xx] citation). Produce:
   scored during the session — never invent one).
 - practice_focus: one concrete, specific recommendation for what to drill
   next session. Not generic ("keep practicing") — name the actual technique.
+
+If a "User's requested focus" line is given below, practice_focus (or the
+headline) should honestly reflect whether the session actually engaged that
+focus area — do not claim it was covered if the transcript doesn't show it.
 """
 
 
@@ -81,12 +85,14 @@ class DebriefAgent:
             api_key=api_key or os.environ.get("GOOGLE_API_KEY")
         )
 
-    def build_sync(self, transcript: str, scored_events: list[dict]) -> Debrief:
+    def build_sync(self, transcript: str, scored_events: list[dict], focus: Optional[str] = None) -> Debrief:
         contents = (
             f"Transcript:\n{transcript}\n\n"
             f"Scored rubric events during the session:\n"
             f"{json.dumps(scored_events, indent=2)}"
         )
+        if focus:
+            contents += f"\n\nUser's requested focus for this session: {focus}"
         response = self._client.models.generate_content(
             model=DEBRIEF_MODEL,
             contents=contents,
@@ -99,12 +105,14 @@ class DebriefAgent:
         )
         return self._parse(response.text, response.usage_metadata)
 
-    async def build(self, transcript: str, scored_events: list[dict]) -> Debrief:
+    async def build(self, transcript: str, scored_events: list[dict], focus: Optional[str] = None) -> Debrief:
         contents = (
             f"Transcript:\n{transcript}\n\n"
             f"Scored rubric events during the session:\n"
             f"{json.dumps(scored_events, indent=2)}"
         )
+        if focus:
+            contents += f"\n\nUser's requested focus for this session: {focus}"
         response = await self._client.aio.models.generate_content(
             model=DEBRIEF_MODEL,
             contents=contents,

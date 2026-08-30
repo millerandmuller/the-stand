@@ -88,6 +88,38 @@ def _rubric_block(rubric: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def _technique_block(techniques: list[dict]) -> str:
+    lines = []
+    for item in techniques:
+        lines.append(f"- [{item['dxx']}] {item['name']} (source: {item['source']})")
+    return "\n".join(lines)
+
+
+_REVERSE_SYSTEM_PROMPT = """You are annotating a reverse-mode training session for a voice training
+tool. In this mode the AI plays {reverse_role} and the user plays {user_role} — you are
+NOT scoring or judging the user. You watch the AI's last statement and identify which of
+the given techniques, if any, it just used.
+
+Rules:
+- Only emit an event for a technique if the AI's statement is actually evidence it used
+  that technique. Most turns will trigger zero or one technique — do not force matches.
+- "triggered" should be true whenever you emit an event here (this mode never scores a
+  "violation" — there is no rule the AI is being held to, only technique identification).
+  Leave "violation" false always.
+- score_delta must always be 0 — this is descriptive annotation of the AI's technique, not
+  an evaluation of the user, and the user must never be penalized or credited by it.
+- note is one short, sober sentence naming what the AI just did — no coaching tone, no
+  exclamation points, just an observation ("Opened with an open-ended discovery question"
+  or "Anchored the conversation on price before asking about needs").
+- If nothing in the technique list applies to this exchange, return an empty events list.
+
+Techniques you may cite (only cite these dxx ids, only when the AI's statement is genuine
+evidence of them; some have no published source and are labeled "uncited" — cite them the
+same way, do not invent a source for them):
+{rubric_block}
+"""
+
+
 @dataclass
 class ScoreEvent:
     criterion: str
@@ -106,29 +138,54 @@ class ScoringResult:
 
 
 class RubricScorer:
-    """Scores one examiner/witness exchange against a case file's rubric."""
+    """Scores one examiner/witness exchange against a case file's rubric.
 
-    def __init__(self, case: dict, api_key: Optional[str] = None):
+    `reverse=True` (F18): switches from "score the user's (examiner) turn
+    against the rubric" to "annotate which technique the AI's (witness')
+    turn just used" — same pipeline, different system prompt and criteria
+    list (`case["reverse"]["techniques"]` instead of `case["rubric"]`), and
+    every event's score_delta is forced to 0 regardless of what the model
+    returns, since reverse mode never scores the user."""
+
+    def __init__(self, case: dict, api_key: Optional[str] = None, reverse: bool = False):
         self.case = case
-        self.rubric = case["rubric"]
+        self.reverse = reverse
         self._client = genai.Client(
             api_key=api_key or os.environ.get("GOOGLE_API_KEY")
         )
-        self._system_prompt = _SYSTEM_PROMPT.format(
-            rubric_block=_rubric_block(self.rubric)
+        if reverse:
+            reverse_block = case["reverse"]
+            self.rubric = reverse_block["techniques"]
+            self._system_prompt = _REVERSE_SYSTEM_PROMPT.format(
+                reverse_role=reverse_block["role"],
+                user_role=reverse_block["user_role"],
+                rubric_block=_technique_block(self.rubric),
+            )
+        else:
+            self.rubric = case["rubric"]
+            self._system_prompt = _SYSTEM_PROMPT.format(
+                rubric_block=_rubric_block(self.rubric)
+            )
+
+    def _contents(self, examiner_question: str, witness_answer: str) -> str:
+        if self.reverse:
+            witness_label = self.case["reverse"]["role"]
+            return (
+                f'AI ({witness_label}): "{witness_answer}"\n'
+                f'User response: "{examiner_question}"'
+            )
+        return (
+            f'Examiner: "{examiner_question}"\n'
+            f'Witness ({self.case["witness"]["name"]}): "{witness_answer}"'
         )
 
     async def score_exchange(
         self, examiner_question: str, witness_answer: str
     ) -> ScoringResult:
         """Scores a single examiner question + witness answer pair."""
-        contents = (
-            f'Examiner: "{examiner_question}"\n'
-            f'Witness ({self.case["witness"]["name"]}): "{witness_answer}"'
-        )
         response = await self._client.aio.models.generate_content(
             model=SCORER_MODEL,
-            contents=contents,
+            contents=self._contents(examiner_question, witness_answer),
             config=types.GenerateContentConfig(
                 system_instruction=self._system_prompt,
                 response_mime_type="application/json",
@@ -142,13 +199,9 @@ class RubricScorer:
         self, examiner_question: str, witness_answer: str
     ) -> ScoringResult:
         """Synchronous variant for scripted test scenarios (no event loop)."""
-        contents = (
-            f'Examiner: "{examiner_question}"\n'
-            f'Witness ({self.case["witness"]["name"]}): "{witness_answer}"'
-        )
         response = self._client.models.generate_content(
             model=SCORER_MODEL,
-            contents=contents,
+            contents=self._contents(examiner_question, witness_answer),
             config=types.GenerateContentConfig(
                 system_instruction=self._system_prompt,
                 response_mime_type="application/json",
@@ -164,5 +217,11 @@ class RubricScorer:
         except (json.JSONDecodeError, TypeError):
             return ScoringResult(usage_metadata=usage_metadata)
         events = [ScoreEvent(**e) for e in data.get("events", [])]
+        if self.reverse:
+            # Deterministic guarantee, not just a prompt instruction: reverse
+            # mode never scores the user, no matter what the model returns.
+            for e in events:
+                e.score_delta = 0
+                e.violation = False
         delta = sum(e.score_delta for e in events)
         return ScoringResult(events=events, running_score_delta=delta, usage_metadata=usage_metadata)

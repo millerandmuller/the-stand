@@ -6,6 +6,7 @@ case_name: "Lopez v. Meridian Construction"
 case_number: null
 case_type: "Deposition · Workplace injury"
 display_order: 3
+user_role: "Deposing attorney for plaintiff Ricardo Lopez."
 card_summary: >
   A scaffolding fall, an unsigned safety log — and a site foreman who
   testifies in Spanish.

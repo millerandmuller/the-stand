@@ -43,8 +43,20 @@ _RESPONSE_SCHEMA = {
         "summary": {"type": "STRING"},
         "affidavit": {"type": "STRING"},
         "goals": {"type": "ARRAY", "items": {"type": "STRING"}},
+        "reverse_affidavit": {"type": "STRING"},
+        "reverse_goals": {"type": "ARRAY", "items": {"type": "STRING"}},
+        "focus_note": {"type": "STRING"},
     },
-    "required": ["title", "card_summary", "summary", "affidavit", "goals"],
+    "required": [
+        "title",
+        "card_summary",
+        "summary",
+        "affidavit",
+        "goals",
+        "reverse_affidavit",
+        "reverse_goals",
+        "focus_note",
+    ],
 }
 
 _SYSTEM_PROMPT = """You are preparing a training-sparring persona from an uploaded document, for a
@@ -53,8 +65,13 @@ voice cross-examination/discovery training tool called The Stand.
 Mode: {mode_label}
 
 {mode_instruction}
+{focus_instruction}
 
-Read the attached document and produce, in your own words:
+Read the attached document and produce, in your own words, TWO persona angles for the
+SAME document in one pass (F18 reverse mode reuses this document without a second
+generation call):
+
+FORWARD persona (the AI grills the user about the document):
 - title: a short (<=8 word) name for this case, drawn from the document's own subject
 - card_summary: one sentence (<=140 chars) teaser for a case-selection card
 - summary: 2-3 sentences describing what this session is about
@@ -66,8 +83,33 @@ Read the attached document and produce, in your own words:
   document) — never a generic goal with no citation. If the document doesn't clearly support
   a citation for a goal, drop that goal rather than inventing a page/section reference.
 
-Never invent facts not in the document. Never produce a goal without a real citation into
-the document text you were given.
+REVERSE persona (the AI instead DEFENDS/SELLS the document, the user grills it):
+- reverse_affidavit: a short first-person opening statement the AI would use if it were
+  the document's own author/advocate presenting and standing behind it
+- reverse_goals: 3-5 bullet points, each something the AI (as the document's author/
+  advocate) would actively DO or ARGUE to defend/sell the document's content — again each
+  one grounded in the document with a concrete citation where the document supports it; if
+  a natural defense/sell point has no citable anchor in the document, phrase it as a
+  general technique instead of inventing a page reference for it
+
+- focus_note: one sentence stating whether (and how) the requested focus area, if any, was
+  actually found and anchored in the document, or "no focus area was requested" if none was
+  given, or an honest note that the requested focus wasn't clearly present in the document
+  if it wasn't — never claim a focus was covered if it wasn't actually there
+
+Never invent facts not in the document. Never produce a goal (forward or reverse) without a
+real citation into the document text you were given, unless explicitly framed as an
+uncited general technique per the rules above.
+"""
+
+_NO_FOCUS_INSTRUCTION = ""
+_FOCUS_INSTRUCTION_TEMPLATE = """
+Focus area requested by the user: "{focus}"
+Anchor the majority of goals (forward) and reverse_goals (reverse) on this section of the
+document, with page/section citations, IF the document actually supports it. If the
+document does not clearly contain this section/topic, say so plainly in focus_note instead
+of inventing citations to force a match — fall back to the document's actual content for
+the goals in that case.
 """
 
 _MODE_INSTRUCTION = {
@@ -105,6 +147,13 @@ class GeneratedCaseContent:
     summary: str
     affidavit: str
     goals: list[str]
+    reverse_affidavit: str = ""
+    reverse_goals: list[str] = None
+    focus_note: str = ""
+
+    def __post_init__(self):
+        if self.reverse_goals is None:
+            self.reverse_goals = []
 
 
 def _validate_mode(mode: str) -> str:
@@ -120,11 +169,17 @@ async def generate_case_content(
     mode: str,
     file_bytes: bytes,
     mime_type: str,
+    focus: Optional[str] = None,
     api_key: Optional[str] = None,
 ) -> GeneratedCaseContent:
     """Runs the one-time, upload-time generation call. Never called from the
     live session path. Does not log file_bytes or the generated text — the
-    leitplanken forbid logging the uploaded document's full content."""
+    leitplanken forbid logging the uploaded document's full content.
+
+    `focus` (F19): optional freeform text naming where in the document the
+    user wants to be grilled/defend — passed into the generation prompt so
+    goals/reverse_goals anchor on that section, cite-or-GAP if the document
+    doesn't actually support it (see focus_note)."""
     _validate_mode(mode)
     if len(file_bytes) > MAX_UPLOAD_BYTES:
         raise UploadTooLargeError(
@@ -132,8 +187,14 @@ async def generate_case_content(
         )
 
     client = genai.Client(api_key=api_key or os.environ.get("GOOGLE_API_KEY"))
+    focus = (focus or "").strip()
+    focus_instruction = (
+        _FOCUS_INSTRUCTION_TEMPLATE.format(focus=focus) if focus else _NO_FOCUS_INSTRUCTION
+    )
     system_prompt = _SYSTEM_PROMPT.format(
-        mode_label=_MODE_LABEL[mode], mode_instruction=_MODE_INSTRUCTION[mode]
+        mode_label=_MODE_LABEL[mode],
+        mode_instruction=_MODE_INSTRUCTION[mode],
+        focus_instruction=focus_instruction,
     )
     response = await client.aio.models.generate_content(
         model=GENERATOR_MODEL,
@@ -167,26 +228,45 @@ async def generate_case_content(
                 "the document didn't yield any citable attack lines — "
                 "try a different file or a clearer document"
             )
+        # reverse_goals empty is not fatal the way forward goals are — reverse
+        # mode is an additive feature (F18); if the model couldn't find
+        # citable defend/sell angles, the upload still yields a playable
+        # forward case, it just won't offer reverse mode (build_case_dict
+        # only adds a `reverse` block when reverse_goals is non-empty).
         return GeneratedCaseContent(
             title=data["title"],
             card_summary=data["card_summary"],
             summary=data["summary"],
             affidavit=data["affidavit"],
             goals=goals,
+            reverse_affidavit=data.get("reverse_affidavit", ""),
+            reverse_goals=list(data.get("reverse_goals") or []),
+            focus_note=data.get("focus_note", ""),
         )
     except (json.JSONDecodeError, KeyError, TypeError) as exc:
         raise GenerationFailedError(f"couldn't parse generated case content: {exc}") from exc
 
 
-def build_case_dict(mode: str, content: GeneratedCaseContent, template: dict, case_id: str) -> dict:
+def build_case_dict(
+    mode: str, content: GeneratedCaseContent, template: dict, case_id: str, focus: Optional[str] = None
+) -> dict:
     """Merges generated per-document content into a mode's curated template
     (escalation ladder, rubric, disposition, short_role) to produce a full,
     schema-valid case dict — same shape `witness_agent.agent._validate_case`
     already enforces for the shipped case files. Nothing here invents a
     rubric criterion or an escalation line; only `title`/`summary`/
-    `card_summary`/`affidavit`/`goals` come from the document."""
+    `card_summary`/`affidavit`/`goals` come from the document.
+
+    F18: if the template declares a `reverse` scaffold (role/escalation/
+    techniques — sales_discovery_call.yaml and dissertation_defense.yaml
+    both do) AND the generation produced non-empty `reverse_goals`, the
+    uploaded case gets its own `reverse` block too — same one-document,
+    two-personas generation the brief asks for, no second API call.
+    F19: `focus` (the user's freeform focus request, if any) and the
+    generator's own honest `focus_note` are carried onto the case so F17's
+    briefing panel and the debrief can reflect them back to the user."""
     template_witness = template["witness"]
-    return {
+    case = {
         "case_name": f"{content.title} [uploaded]",
         "display_name": content.title,
         "case_number": None,
@@ -194,6 +274,9 @@ def build_case_dict(mode: str, content: GeneratedCaseContent, template: dict, ca
         "display_order": 90,
         "card_summary": content.card_summary,
         "summary": content.summary,
+        "user_role": template.get("user_role"),
+        "focus": (focus or "").strip() or None,
+        "focus_note": content.focus_note or None,
         "witness": {
             "name": template_witness["name"],
             "role": template_witness["role"],
@@ -219,3 +302,17 @@ def build_case_dict(mode: str, content: GeneratedCaseContent, template: dict, ca
         "uploaded": True,
         "source_case_id": case_id,
     }
+    template_reverse = template.get("reverse")
+    if template_reverse and content.reverse_goals:
+        case["reverse"] = {
+            "role": template_reverse["role"],
+            "short_role": template_reverse["short_role"],
+            "user_role": template_reverse["user_role"],
+            "disposition": template_reverse["disposition"],
+            "affidavit": content.reverse_affidavit or template_reverse.get("affidavit", ""),
+            "goals": content.reverse_goals,
+            "escalation": template_reverse["escalation"],
+            "opening_stage_direction": template_reverse["opening_stage_direction"],
+            "techniques": template_reverse["techniques"],
+        }
+    return case

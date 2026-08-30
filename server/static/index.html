@@ -89,6 +89,56 @@
   .case-card .witness-row .who { font-size: 12px; color: var(--text-2); }
   .case-card .witness-row .disposition { color: var(--text-5); }
 
+  /* ---------- F17 briefing link / F18 reverse toggle on the card ---------- */
+  .case-card .card-actions { display: flex; align-items: center; justify-content: space-between; margin-top: 8px; gap: 8px; }
+  .briefing-link {
+    font: inherit; font-size: 11px; letter-spacing: 0.04em; color: var(--text-4);
+    background: none; border: none; padding: 0; cursor: pointer; text-decoration: underline;
+  }
+  .briefing-link:hover { color: var(--accent-hover); }
+  .reverse-toggle {
+    font-size: 10.5px; letter-spacing: 0.06em; padding: 4px 9px; border-radius: 3px;
+    border: 1px solid var(--line-2); background: #17181a; color: var(--text-3); cursor: pointer; font-family: inherit;
+  }
+  .reverse-toggle:hover { border-color: var(--accent); color: var(--accent-hover); }
+  .reverse-toggle.on { border-color: var(--accent); background: rgba(176,141,87,0.14); color: var(--accent-hover); }
+
+  /* ---------- F19 BYOC focus field ---------- */
+  .upload-focus-row { display: flex; gap: 6px; margin-top: 2px; }
+  .upload-focus-row input {
+    flex: 1; font: inherit; font-size: 11.5px; background: #101113; border: 1px solid var(--line-2);
+    border-radius: 3px; padding: 6px 8px; color: var(--text-2);
+  }
+  .upload-focus-row input::placeholder { color: var(--text-5); }
+
+  /* ---------- F17 Case-Briefing-Panel ---------- */
+  #briefingToggle {
+    display: flex; align-items: center; gap: 7px; font: inherit; font-size: 12px; letter-spacing: 0.04em;
+    color: var(--text-3); background: #17181a; border: 1px solid var(--line-2); border-radius: 4px;
+    padding: 7px 14px; cursor: pointer;
+  }
+  #briefingToggle:hover { border-color: var(--accent); color: var(--accent-hover); }
+  .briefing-panel {
+    position: fixed; top: 0; right: 0; bottom: 0; width: 420px; max-width: 90vw;
+    background: var(--surface-3); border-left: 1px solid var(--line-1); z-index: 40;
+    display: flex; flex-direction: column; box-shadow: -20px 0 60px rgba(0,0,0,0.4);
+    transform: translateX(100%); transition: transform 0.22s ease;
+  }
+  .briefing-panel.open { transform: translateX(0); }
+  .briefing-panel .bp-head {
+    display: flex; align-items: center; justify-content: space-between; padding: 18px 20px 14px;
+    border-bottom: 1px solid var(--line-1);
+  }
+  .briefing-panel .bp-head .label { font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--accent); }
+  .briefing-panel .bp-close {
+    font: inherit; font-size: 18px; background: none; border: none; color: var(--text-4); cursor: pointer; line-height: 1;
+  }
+  .briefing-panel .bp-body { flex: 1; overflow-y: auto; padding: 18px 20px 24px; display: flex; flex-direction: column; gap: 18px; }
+  .briefing-panel .bp-section .kicker { font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-4); margin-bottom: 6px; }
+  .briefing-panel .bp-section .body-text { font-size: 14px; line-height: 1.55; color: var(--text-1); }
+  .briefing-panel .bp-section .body-text.muted { color: var(--text-3); font-style: italic; }
+  .briefing-scrim { position: fixed; inset: 0; background: rgba(0,0,0,0.35); z-index: 39; }
+
   /* ---------- "your case" upload card (F16) ---------- */
   .case-card.upload-card { cursor: default; border-style: dashed; }
   .case-card.upload-card .body { gap: 12px; }
@@ -265,6 +315,10 @@
     <div class="name">The Stand</div>
     <div class="sans context" id="roomContext"></div>
   </div>
+  <button class="sans" id="briefingToggle" type="button">
+    <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="1.5" y="1.5" width="10" height="10" rx="1.5"></rect><path d="M4 4.5h5M4 6.7h5M4 8.9h3"></path></svg>
+    Case file
+  </button>
   <div class="right">
     <div class="sans live"><div class="dot"></div><div id="liveClock">LIVE · 00:00</div></div>
     <div class="disclaimer">Trains technique. Not legal advice.</div>
@@ -354,6 +408,18 @@
     </div>
   </div>
 </main>
+
+<!-- ============ F17 CASE-BRIEFING PANEL ============ -->
+<div class="briefing-scrim" id="briefingScrim" hidden></div>
+<aside class="briefing-panel sans" id="briefingPanel">
+  <div class="bp-head">
+    <div class="label">Case Briefing</div>
+    <button class="bp-close" id="briefingClose" type="button" aria-label="Close">&times;</button>
+  </div>
+  <div class="bp-body" id="briefingBody">
+    <div class="body-text muted">Loading…</div>
+  </div>
+</aside>
 
 <script src="/static/app.js"></script>
 </body>

@@ -26,6 +26,15 @@ const dialSegments = document.getElementById("dialSegments");
 const endBtn = document.getElementById("endBtn");
 const scoreLines = document.getElementById("scoreLines");
 const scoreTotal = document.getElementById("scoreTotal");
+const sidebarLabel = document.querySelector(".sidebar .sidebar-header .label");
+const sidebarScoreScale = document.querySelector(".sidebar .sidebar-header .score-scale");
+const sidebarFooter = document.querySelector(".sidebar .footer");
+
+const briefingToggle = document.getElementById("briefingToggle");
+const briefingPanel = document.getElementById("briefingPanel");
+const briefingScrim = document.getElementById("briefingScrim");
+const briefingClose = document.getElementById("briefingClose");
+const briefingBody = document.getElementById("briefingBody");
 
 const debriefContext = document.getElementById("debriefContext");
 const debriefScore = document.getElementById("debriefScore");
@@ -52,7 +61,10 @@ let witnessAccum = "";
 let scoreEventLog = []; // {dxx, triggered, violation} — used to color debrief moments honestly
 let uploadModes = []; // F16: which modes the server allows Bring-Your-Own-Case for
 let pendingUploadMode = null;
+let pendingUploadFocus = ""; // F19
 let uploading = false;
+let reverseSelected = false; // F18: applies to the currently selectedCaseId
+let sessionReverse = false; // F18: locked in for the session in progress
 
 function showView(name) {
   const map = {
@@ -108,16 +120,85 @@ function renderCaseGrid() {
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="#8a8880" stroke-width="1.3"><circle cx="8" cy="5.5" r="2.6"></circle><path d="M2.8 13.5c0.8-2.7 2.9-4 5.2-4s4.4 1.3 5.2 4"></path></svg>
           <div class="who">${c.witness_name} <span class="disposition">· ${c.witness_short_role}${c.witness_disposition ? " · " + c.witness_disposition : ""}</span></div>
         </div>
+        <div class="card-actions">
+          <button type="button" class="briefing-link" data-case-id="${c.case_id}">Read the case file</button>
+          ${
+            c.reverse_available
+              ? `<button type="button" class="reverse-toggle${c.case_id === selectedCaseId && reverseSelected ? " on" : ""}" data-case-id="${c.case_id}" title="${c.reverse_short_role || "Reverse mode"}">Take the other chair</button>`
+              : ""
+          }
+        </div>
       </div>
     `;
-    card.onclick = () => {
+    card.onclick = (e) => {
+      if (e.target.closest(".briefing-link") || e.target.closest(".reverse-toggle")) return;
+      if (selectedCaseId !== c.case_id) reverseSelected = false;
       selectedCaseId = c.case_id;
       renderCaseGrid();
     };
+    card.querySelector(".briefing-link").onclick = (e) => {
+      e.stopPropagation();
+      openBriefing(c.case_id, c.case_id === selectedCaseId && reverseSelected ? "reverse" : "examiner");
+    };
+    const reverseBtn = card.querySelector(".reverse-toggle");
+    if (reverseBtn) {
+      reverseBtn.onclick = (e) => {
+        e.stopPropagation();
+        if (selectedCaseId !== c.case_id) {
+          selectedCaseId = c.case_id;
+          reverseSelected = true;
+        } else {
+          reverseSelected = !reverseSelected;
+        }
+        renderCaseGrid();
+      };
+    }
     caseGrid.appendChild(card);
   }
   if (uploadModes.length) renderUploadCard();
 }
+
+// ---------- F17: Case-Briefing-Panel ----------
+async function openBriefing(caseId, role) {
+  briefingPanel.classList.add("open");
+  briefingScrim.hidden = false;
+  briefingBody.innerHTML = `<div class="body-text muted">Loading…</div>`;
+  try {
+    const res = await fetch(`/api/cases/${encodeURIComponent(caseId)}/briefing?role=${role === "reverse" ? "reverse" : "examiner"}`);
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.detail || `couldn't load the briefing (${res.status})`);
+    }
+    const b = await res.json();
+    const focusBlock = b.focus
+      ? `<div class="bp-section"><div class="kicker">Your focus</div><div class="body-text">${b.focus}${b.focus_note ? `<br><span class="muted">${b.focus_note}</span>` : ""}</div></div>`
+      : "";
+    briefingBody.innerHTML = `
+      <div class="bp-section"><div class="kicker">Case</div><div class="body-text">${b.case_name}</div><div class="body-text muted">${b.summary}</div></div>
+      <div class="bp-section"><div class="kicker">Your role</div><div class="body-text">${b.user_role || "—"}</div></div>
+      <div class="bp-section"><div class="kicker">${b.reverse ? "Who you're up against" : "Witness"}</div><div class="body-text">${b.counterpart_role}${b.counterpart_disposition ? ` <span class="muted">· ${b.counterpart_disposition}</span>` : ""}</div></div>
+      <div class="bp-section"><div class="kicker">Affidavit</div><div class="body-text">${b.affidavit || "—"}</div></div>
+      ${focusBlock}
+    `;
+  } catch (err) {
+    briefingBody.innerHTML = `<div class="body-text muted">${err && err.message ? err.message : err}</div>`;
+  }
+}
+
+function closeBriefing() {
+  briefingPanel.classList.remove("open");
+  briefingScrim.hidden = true;
+}
+
+briefingClose.onclick = closeBriefing;
+briefingScrim.onclick = closeBriefing;
+briefingToggle.onclick = () => {
+  if (briefingPanel.classList.contains("open")) {
+    closeBriefing();
+  } else if (selectedCaseId) {
+    openBriefing(selectedCaseId, sessionReverse ? "reverse" : "examiner");
+  }
+};
 
 // ---------- F16: Bring Your Own Case ----------
 function renderUploadCard() {
@@ -133,6 +214,7 @@ function renderUploadCard() {
       <div class="kicker-row"><div class="kicker">Your case</div></div>
       <div class="title">Bring your own</div>
       <div class="upload-hint">Upload a PDF or text document — your dissertation, a product briefing — and a case is generated from it in about a minute. Legal cross-exam stays fictional-only; upload works for Defense and Sales.</div>
+      <div class="upload-focus-row"><input type="text" id="uploadFocusInput" placeholder="Optional: where do you want to be grilled? (e.g. Chapter 4, methodology)"></div>
       <div class="upload-modes">${buttons}</div>
       <div class="upload-progress" id="uploadProgress"></div>
     </div>
@@ -141,6 +223,8 @@ function renderUploadCard() {
     btn.onclick = () => {
       if (uploading) return;
       pendingUploadMode = btn.dataset.mode;
+      const focusInput = document.getElementById("uploadFocusInput");
+      pendingUploadFocus = focusInput ? focusInput.value.trim() : "";
       uploadInput.value = "";
       uploadInput.click();
     };
@@ -162,6 +246,7 @@ uploadInput.addEventListener("change", async () => {
     const form = new FormData();
     form.append("mode", mode);
     form.append("file", file);
+    if (pendingUploadFocus) form.append("focus", pendingUploadFocus);
     const res = await fetch("/api/cases/upload", { method: "POST", body: form });
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
@@ -316,8 +401,14 @@ function addScoreLine(evt) {
     <div class="cite">[${evt.dxx}] ${evt.criterion}</div>
   `;
   scoreLines.prepend(div);
-  runningScore += evt.score_delta;
-  scoreTotal.textContent = runningScore;
+  if (sessionReverse) {
+    // F18: reverse mode never scores the user (server forces score_delta=0)
+    // — keep the tile as a neutral placeholder instead of a running total.
+    scoreTotal.textContent = "—";
+  } else {
+    runningScore += evt.score_delta;
+    scoreTotal.textContent = runningScore;
+  }
 }
 
 // ---------- debrief rendering ----------
@@ -399,6 +490,7 @@ function connectWS() {
           type: "start",
           case_id: selectedCaseId,
           pressure_level: currentDialLevel,
+          role: sessionReverse ? "reverse" : "examiner",
         })
       );
       resolve();
@@ -461,6 +553,8 @@ dialSegments.addEventListener("click", (e) => {
 
 // ---------- start / end ----------
 async function beginSession() {
+  sessionReverse = reverseSelected;
+  closeBriefing();
   audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   playHead = audioCtx.currentTime;
   showStatus("");
@@ -488,8 +582,23 @@ async function beginSession() {
   const verb =
     (selected && selected.session_verb) ||
     (selected && selected.case_type && selected.case_type.includes("Sparring") ? "discovery call with" : "cross-examination of");
-  roomContext.textContent = selected ? `${selected.case_name} · ${verb} ${selected.witness_name}` : "";
-  avatarInitials.textContent = selected ? initialsFor(selected.witness_name) : "--";
+  const counterpartName = sessionReverse ? (selected && selected.reverse_short_role) || "reverse persona" : selected && selected.witness_name;
+  roomContext.textContent = selected
+    ? `${selected.case_name} · ${sessionReverse ? "reverse — " + verb + " " : verb + " "}${counterpartName}`
+    : "";
+  avatarInitials.textContent = selected ? initialsFor(counterpartName || "--") : "--";
+
+  // F18: reverse mode annotates the AI's technique instead of scoring the
+  // user — relabel the sidebar so it reads as a live technique log, not a
+  // rubric ballot (server also forces every event's score_delta to 0).
+  if (sidebarLabel) sidebarLabel.textContent = sessionReverse ? "Technique" : "Rubric";
+  if (sidebarScoreScale) sidebarScoreScale.textContent = sessionReverse ? "live annotation" : "/ 10 · AMTA scale";
+  if (sidebarFooter) {
+    sidebarFooter.textContent = sessionReverse
+      ? "Every line cites its source where one exists. Some techniques have none — marked uncited."
+      : "Every line cites its source. Nothing is scored without one.";
+  }
+  scoreTotal.textContent = sessionReverse ? "—" : "0";
 
   examinerAccum = "";
   witnessAccum = "";

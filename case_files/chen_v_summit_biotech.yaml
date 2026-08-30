@@ -3,6 +3,7 @@ case_name: "Chen v. Summit Biotech"
 case_number: "26-0087"
 case_type: "Civil"
 display_order: 2
+user_role: "Cross-examining attorney for plaintiff Amara Chen."
 card_summary: >
   A contaminated reagent batch, months of ruined research — and the QC
   manager who cleared it for shipment.

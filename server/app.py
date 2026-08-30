@@ -53,12 +53,14 @@ from server.firestore_store import SessionStore, UploadedCaseStore
 from witness_agent.agent import (
     DISCLAIMER,
     MalformedCaseError,
+    ReverseNotAvailableError,
     UnknownCaseError,
     _validate_case,
     build_agent_from_case,
     case_language_code,
     load_case,
     make_agent_for_case,
+    reverse_opening_direction,
 )
 from witness_agent.case_generator import (
     GenerationFailedError,
@@ -118,6 +120,7 @@ async def index():
 
 def _case_summary(case_id: str, case: dict) -> dict:
     language = case.get("language")
+    reverse = case.get("reverse")
     return {
         "case_id": case_id,
         "case_name": case["case_name"],
@@ -134,6 +137,54 @@ def _case_summary(case_id: str, case: dict) -> dict:
         "language": {"code": language["code"], "name": language["name"]} if language else None,
         "session_verb": case.get("session_verb"),
         "uploaded": bool(case.get("uploaded")),
+        # F17
+        "user_role": case.get("user_role"),
+        # F19
+        "focus": case.get("focus"),
+        "focus_note": case.get("focus_note"),
+        # F18
+        "reverse_available": bool(reverse),
+        "reverse_short_role": reverse.get("short_role") if reverse else None,
+    }
+
+
+def _case_briefing(case_id: str, case: dict, role: str) -> dict:
+    """F17 Case-Briefing-Panel content. Read-only, strictly from the case
+    file. Deliberately never includes `witness.goals` / `reverse.goals` —
+    those are the hidden playbook (spielleiter-Wissen); leaking them kills
+    the sparring value. Forward briefing shows the witness's/committee's
+    profile and the user's own role; a `role=reverse` briefing instead shows
+    the reverse persona's profile and the user's role in that mode."""
+    if role == "reverse":
+        reverse = case.get("reverse")
+        if not reverse:
+            raise ReverseNotAvailableError(f"case '{case_id}' has no reverse mode")
+        return {
+            "case_id": case_id,
+            "case_name": case["case_name"],
+            "summary": case["summary"].strip(),
+            "user_role": reverse["user_role"],
+            "counterpart_role": reverse["role"],
+            "counterpart_short_role": reverse["short_role"],
+            "counterpart_disposition": reverse.get("disposition"),
+            "affidavit": reverse.get("affidavit", ""),
+            "focus": case.get("focus"),
+            "focus_note": case.get("focus_note"),
+            "reverse": True,
+        }
+    witness = case["witness"]
+    return {
+        "case_id": case_id,
+        "case_name": case["case_name"],
+        "summary": case["summary"].strip(),
+        "user_role": case.get("user_role"),
+        "counterpart_role": witness["role"],
+        "counterpart_short_role": witness.get("short_role", witness["role"]),
+        "counterpart_disposition": witness.get("disposition"),
+        "affidavit": witness["affidavit"],
+        "focus": case.get("focus"),
+        "focus_note": case.get("focus_note"),
+        "reverse": False,
     }
 
 
@@ -165,20 +216,28 @@ async def list_cases():
 
 
 @app.post("/api/cases/upload")
-async def upload_case(mode: str = Form(...), file: UploadFile = File(...)):
+async def upload_case(mode: str = Form(...), file: UploadFile = File(...), focus: str = Form(None)):
     """F16 Bring Your Own Case. Only "defense" and "sales" modes — the legal
-    cross-exam mode stays fiction-only (brief Section 8, Rule 1.6/D-28)."""
+    cross-exam mode stays fiction-only (brief Section 8, Rule 1.6/D-28).
+
+    F19: optional `focus` form field — where the user wants to be grilled
+    (e.g. "Chapter 4, methodology"). Passed through to generation so the
+    goals anchor on that section; cite-or-GAP if the document doesn't
+    support it (see `content.focus_note`, carried onto the case)."""
     if mode not in UPLOAD_MODE_TEMPLATE_CASE_ID:
         raise HTTPException(status_code=400, detail=f"mode must be one of {list(UPLOAD_MODE_TEMPLATE_CASE_ID)}")
 
     file_bytes = await file.read()
     mime_type = file.content_type or "application/pdf"
     # Never log file_bytes or any generated text (leitplanken: "kein Logging
-    # des Volltexts") — filename/size/mode only.
-    logger.info("upload_case: mode=%s filename=%s bytes=%d", mode, file.filename, len(file_bytes))
+    # des Volltexts") — filename/size/mode/focus only.
+    logger.info(
+        "upload_case: mode=%s filename=%s bytes=%d focus_set=%s",
+        mode, file.filename, len(file_bytes), bool((focus or "").strip()),
+    )
 
     try:
-        content = await generate_case_content(mode, file_bytes, mime_type)
+        content = await generate_case_content(mode, file_bytes, mime_type, focus=focus)
     except UploadTooLargeError as exc:
         raise HTTPException(status_code=413, detail=str(exc)) from exc
     except UnsupportedModeError as exc:
@@ -188,13 +247,29 @@ async def upload_case(mode: str = Form(...), file: UploadFile = File(...)):
 
     template = load_case(UPLOAD_MODE_TEMPLATE_CASE_ID[mode])
     case_id = f"uploaded_{uuid.uuid4().hex[:10]}"
-    case = build_case_dict(mode, content, template, case_id)
+    case = build_case_dict(mode, content, template, case_id, focus=focus)
     _validate_case(case, case_id)  # same schema gate every static case file passes
 
     _uploaded_cases_cache[case_id] = case
     await uploaded_case_store.save_case(case_id, case)
 
     return {"case": _case_summary(case_id, case)}
+
+
+@app.get("/api/cases/{case_id}/briefing")
+async def case_briefing(case_id: str, role: str = "examiner"):
+    """F17 Case-Briefing-Panel: read-only case context (parties, the user's
+    own role, counterpart profile, affidavit summary, focus). Never includes
+    hidden goals/strategy — see `_case_briefing` docstring. Available before
+    a session starts (case-selection card) and during it (header toggle)."""
+    try:
+        case = await _resolve_case(case_id)
+    except UnknownCaseError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    try:
+        return _case_briefing(case_id, case, role)
+    except ReverseNotAvailableError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.websocket("/ws/{session_id}")
@@ -221,12 +296,16 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str) -> None:
         pressure_level = 1
     pressure_level = min(max(pressure_level, 1), 3)
     user_id = "operator"
+    # F18: "role": "reverse" swaps in the case's reverse persona instead of
+    # the witness. Anything other than the literal "reverse" stays forward
+    # mode (the default, same as before this field existed).
+    reverse = first.get("role") == "reverse"
 
     try:
         case = await _resolve_case(case_id)
-        case, agent, stage_direction_for_level = build_agent_from_case(case)
-        scorer = RubricScorer(case)
-    except (UnknownCaseError, MalformedCaseError) as exc:
+        case, agent, stage_direction_for_level = build_agent_from_case(case, reverse=reverse)
+        scorer = RubricScorer(case, reverse=reverse)
+    except (UnknownCaseError, MalformedCaseError, ReverseNotAvailableError) as exc:
         await websocket.send_text(json.dumps({"type": "error", "message": str(exc)}))
         return
     debrief_agent = DebriefAgent()
@@ -258,6 +337,22 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str) -> None:
     )
 
     live_request_queue = LiveRequestQueue()
+
+    # F18 conversational initiative: Live agents are reactive by default, but
+    # reverse mode needs the AI to open the call (it now plays the active
+    # seller/candidate). One-time `send_content` trigger queued before
+    # run_live starts consuming — the exact mechanism the `dial` handler
+    # below already uses mid-session, just fired once at the start instead
+    # of on an operator action. `RunConfig.proactivity` is documented
+    # native-audio-only and unsupported on the pinned LIVE_MODEL, so this
+    # stays the only initiative mechanism (see witness_agent/agent.py
+    # reverse_opening_direction docstring).
+    if reverse:
+        opening_direction = reverse_opening_direction(case)
+        if opening_direction:
+            live_request_queue.send_content(
+                types.Content(role="user", parts=[types.Part(text=opening_direction)])
+            )
 
     # Transcript bookkeeping for the RubricScorer (per-exchange) and the
     # DebriefAgent (whole session) — the scorer needs one examiner question
@@ -410,7 +505,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str) -> None:
         live_request_queue.close()
         try:
             transcript = "\n".join(transcript_lines) or "(no exchanges recorded)"
-            debrief = await debrief_agent.build(transcript, scored_events)
+            debrief = await debrief_agent.build(transcript, scored_events, focus=case.get("focus"))
             cost_tracker.add_debrief(debrief.usage_metadata)
             debrief_payload = {
                 "amta_score": debrief.amta_score,

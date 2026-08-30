@@ -3,6 +3,7 @@ case_name: "Martinez v. Nordbay"
 case_number: "26-0114"
 case_type: "Civil"
 display_order: 1
+user_role: "Cross-examining attorney for plaintiff Elena Martinez."
 card_summary: >
   A mislabeled hazardous pallet, a damaged warehouse — and a shift
   supervisor who was there that night.

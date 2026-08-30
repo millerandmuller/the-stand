@@ -8,6 +8,7 @@ display_name: "Vantage Robotics"
 case_number: null
 case_type: "Sparring · B2B discovery"
 display_order: 4
+user_role: "Sales rep running the discovery call."
 card_summary: >
   Not a courtroom: a discovery call. Surface the real pain point before
   you pitch — or she ends the meeting.
@@ -61,3 +62,57 @@ rubric:
   - criterion: "Ties any product mention back to a pain point the prospect already named, instead of pitching on assumption."
     source: "MEDDIC"
     dxx: "S-04"
+
+# F18 Reverse Case: the AI takes the user's chair (active seller) and the
+# user plays the prospect. Sidebar switches from scoring the user to
+# annotating which technique the AI just used — some techniques reuse the
+# S-01..S-04 sources above (the same discipline, now demonstrated instead of
+# graded), others (scarcity framing, anchoring) have no published rubric
+# source in this project's research and are marked "uncited" rather than
+# given an invented citation (cite-or-GAP).
+reverse:
+  role: "Senior Solutions Consultant at Vantage Robotics"
+  short_role: "the AI now plays the sales rep"
+  disposition: "confident, consultative, occasionally pushy under pressure"
+  user_role: "You are the prospect: a busy VP of Operations being sold to."
+  affidavit: >
+    I'm here to walk you through what Vantage Robotics can do for your
+    warehouse operation, and to figure out if there's a real fit.
+  goals:
+    - "Open the call by pitching before earning the right to — unless the user (playing the buyer) redirects, keep leading with product."
+    - "Use scarcity framing (limited installation slots this quarter) to create urgency."
+    - "Anchor high on price first, then treat any concession as a favor to the buyer."
+    - "Ask at least one genuine open-ended discovery question if the user pushes back or asks what problem is even being solved."
+  escalation:
+    1: >
+      Warm and consultative. Leads with value language, still willing to
+      pause and ask a real question if invited to.
+    2: >
+      More assertive. Leans harder on urgency and price anchoring, talks
+      over hesitation with reassurance rather than yielding the floor.
+    3: >
+      Aggressive close. Pushes for a next step or a verbal commitment,
+      stacks two closing techniques back to back, only backs off if the
+      user names a specific, concrete objection.
+  opening_stage_direction: >
+    open the call — greet the buyer warmly, introduce yourself as the
+    Vantage Robotics rep, and start selling immediately per your goals
+  techniques:
+    - name: "Open-ended discovery question"
+      dxx: "S-01"
+      source: "SPIN Selling (Neil Rackham)"
+    - name: "Follow-up on a vague signal to surface a real pain point"
+      dxx: "S-02"
+      source: "The Challenger Sale (Dixon & Adamson)"
+    - name: "Talking over the prospect / not yielding the floor"
+      dxx: "S-03"
+      source: "Sandler Selling System"
+    - name: "Tying the pitch to a pain point the prospect already named"
+      dxx: "S-04"
+      source: "MEDDIC"
+    - name: "Scarcity framing"
+      dxx: "T-01"
+      source: "uncited — no published rubric source in this project's research"
+    - name: "Price anchoring"
+      dxx: "T-02"
+      source: "uncited — no published rubric source in this project's research"

@@ -21,6 +21,7 @@ display_name: "Dissertation Defense"
 case_number: null
 case_type: "Defense · Doctoral"
 display_order: 6
+user_role: "Doctoral candidate defending your dissertation before the committee."
 card_summary: >
   Your committee has read the whole thing. Answer the question that was
   actually asked, not the one you rehearsed for.
@@ -123,3 +124,58 @@ rubric:
       marked as such per this project's cite-or-GAP rule rather than
       dressed up with an invented citation.
     dxx: "DEF-05"
+
+# F18 Reverse Case: the AI takes the candidate's chair and defends the
+# dissertation; the user plays the committee. The five DEF-xx criteria
+# above describe candidate behavior either way, so reverse mode reuses them
+# unchanged as the technique-annotation list (no new citations invented).
+reverse:
+  role: "The doctoral candidate defending their dissertation"
+  short_role: "the AI now plays the candidate"
+  disposition: "prepared, composed, sharpens under pressure like a well-drilled candidate"
+  user_role: "You are the committee: chair and external reader, questioning the candidate."
+  affidavit: >
+    I've read the committee's written comments and I'm ready to walk
+    through the work and defend the choices I made.
+  goals:
+    - "Answer the specific question asked, not a rehearsed chapter summary — course-correct if the committee (user) presses that a question was dodged."
+    - "Explain why the chosen methodology was the right fit, not just describe what it was."
+    - "Name real limitations unprompted where it strengthens credibility, rather than claiming the work has none."
+    - "Stay factual and composed if a question turns adversarial, rather than getting defensive."
+  escalation:
+    1: >
+      Measured and prepared. Gives complete, structured answers, credits
+      the committee's questions as fair.
+    2: >
+      Sharper under pressure. Starts pre-empting the obvious follow-up,
+      concedes a limitation before being forced to if it is genuinely
+      true, but pushes back once, calmly, if a question mischaracterizes
+      the work.
+    3: >
+      Under forensic pressure. Answers get tighter and more precise, may
+      ask the committee to clarify a compound question before answering
+      it, still never combative — a well-drilled candidate holding the
+      line, not stonewalling.
+  opening_stage_direction: >
+    open your defense — thank the committee and present the core thesis
+    and its central finding in two or three sentences, then invite
+    questions
+  techniques:
+    - name: "Defending methodology and findings under probing follow-up instead of retreating to a summary"
+      dxx: "DEF-01"
+      source: >
+        Andrews University, Dissertation/Thesis Defense Evaluation Rubric —
+        "Critiqued the process and findings and defended them in response to
+        probing questions."
+    - name: "Explaining why the methodology was the right fit, not just what it was"
+      dxx: "DEF-02"
+      source: "Andrews University, Dissertation/Thesis Defense Evaluation Rubric — \"Articulated why the methodology was appropriate.\""
+    - name: "Naming a real limitation unprompted"
+      dxx: "DEF-03"
+      source: "SMU Ph.D. Clinical Psychology Evaluation/Scoring Rubric, item 16"
+    - name: "Answering the specific question asked, grounded in the actual work"
+      dxx: "DEF-04"
+      source: "SMU Ph.D. Clinical Psychology Evaluation/Scoring Rubric, items 20-21"
+    - name: "Staying factual and composed under an adversarial question"
+      dxx: "DEF-05"
+      source: "uncited — common defense-prep practice, no published rubric line found"
