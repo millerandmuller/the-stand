@@ -121,7 +121,13 @@ def _reconcile_transcript_chunk(accumulated: str, chunk: str) -> tuple[str, str]
         return accumulated, ""
     if not accumulated:
         return chunk, chunk
-    if chunk == accumulated or accumulated.endswith(chunk):
+    if chunk in accumulated:
+        # Covers exact repeats, suffix repeats, AND the narrower cases an
+        # adversarial review caught the old `accumulated.endswith(chunk)`
+        # check missing: a strict-prefix-shrink resend (chunk is a shorter
+        # already-seen prefix of accumulated) and a resend of a middle
+        # substring — both used to fall through to "append" and corrupt the
+        # transcript instead of being recognized as already-present text.
         return accumulated, ""
     if chunk.startswith(accumulated):
         return chunk, chunk[len(accumulated):]
@@ -562,9 +568,15 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str) -> None:
                         if new_focus:
                             active_focus = new_focus
                             scorer.set_focus(new_focus)
+                            # Adversarial-review hardening: neutralize `]`/`"`
+                            # before embedding in the bracket-wrapped stage
+                            # direction so a focus value can't break out of
+                            # the `[STAGE DIRECTION: ...]` wrapper the model
+                            # is told to treat as meta-notation, not dialogue.
+                            safe_focus = new_focus.replace("]", ")").replace('"', "'")
                             direction = (
                                 f"[STAGE DIRECTION: starting with your very next answer, "
-                                f"aggressively steer toward \"{new_focus}\" — bring it up "
+                                f"aggressively steer toward \"{safe_focus}\" — bring it up "
                                 f"yourself and press on it for the rest of this session]"
                             )
                             live_request_queue.send_content(

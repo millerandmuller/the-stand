@@ -310,6 +310,19 @@ def witness_instruction(context: ReadonlyContext) -> str:
     return _build_instruction(_case, level)
 
 
+def _is_stage_direction(text: str) -> bool:
+    """True for an operator note (`[STAGE DIRECTION: ...]`) — never something
+    the examiner/user actually said. Found during adversarial review: the
+    character-fidelity guard scans the "last user turn", which right after a
+    dial move or refocus IS this operator-authored text, not spoken dialogue.
+    A plausible focus phrase (e.g. containing "as an AI-assisted process")
+    could otherwise trip `_BREAK_CHARACTER_PATTERNS`'s bare substring match
+    and derail the very refocus it's supposed to apply — the guard must
+    honor the same rule the instruction text already states."""
+    stripped = text.strip()
+    return stripped.startswith("[STAGE DIRECTION:") and stripped.endswith("]")
+
+
 def guard_character(
     callback_context, llm_request: LlmRequest
 ) -> Optional[LlmResponse]:
@@ -326,7 +339,7 @@ def guard_character(
             last_user_text = "".join(p.text or "" for p in content.parts)
             break
 
-    if not last_user_text:
+    if not last_user_text or _is_stage_direction(last_user_text):
         return None
 
     witness_name = _case["witness"]["name"].split()[0]
@@ -409,7 +422,7 @@ def build_agent_from_case(case: dict, reverse: bool = False):
             if content.role == "user" and content.parts:
                 last_user_text = "".join(p.text or "" for p in content.parts)
                 break
-        if not last_user_text:
+        if not last_user_text or _is_stage_direction(last_user_text):
             return None
         witness_name = (
             case["reverse"]["role"] if reverse else case["witness"]["name"].split()[0]
