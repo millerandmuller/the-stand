@@ -435,3 +435,51 @@ spam, stale selection and an empty grid (start block count stayed exactly 1,
 click handler stayed bound); the room layout re-probed with a 10,000-character
 transcript down to 900x500 (all controls reachable); model IDs and Cloud Run
 timeout/memory against brief Section H.T (exact match).
+
+## OPEN, demo-critical, NOT fixed this round — the debrief never arrives
+
+Found by the demo rehearsal, independently reproduced twice by the coordinator
+(a raw websocket client, no browser involved). **After "End session." no
+`{"type":"debrief"}` frame is ever sent — not within 120 seconds, with no error
+and no close frame. The room simply goes silent.** This is the last step of the
+Kern-Loop and the entire basis of the Proof beat's on-screen `[D-08]`/AMTA
+comparison, and of dossier test case T-06.
+
+**Root cause, established at the log level, not inferred:**
+
+    upstream_task()  -- breaks on end_session, finally: live_request_queue.close()
+    downstream_task() -- `async for event in runner.run_live(...)` NEVER RETURNS
+    await asyncio.gather(upstream_task(), downstream_task())   <-- hangs forever
+    finally:  <-- never reached; this is where the debrief is built and sent
+
+A log line placed at the top of that `finally` block (`"session loop returned,
+building debrief"`) **never appears**. So the debrief code is not failing — it
+is never reached. Closing the `LiveRequestQueue` does not terminate the
+`run_live()` async generator.
+
+**Confirmed NOT a regression from this round:** the diff `8699843..ebfb55c`
+does not touch `end_session`, the `gather`, or `run_live`. Pre-existing, and it
+has been latent through every prior round because no agent could reach the
+debrief screen and no human test happened to wait for it.
+
+**Also confirmed, so the fix has something to work with:** in a real browser
+session `event.turn_complete` fires correctly (measured: twice in a two-turn
+session, `wit_len=175` and `wit_len=181`), so `transcript_lines` and
+`scored_events` do populate. The debrief would have real content the moment the
+handler is allowed to reach it. (A raw-websocket harness does *not* produce
+turn-ends — worth knowing before anyone re-tests this and draws the wrong
+conclusion from an empty transcript.)
+
+**Fixed this round (safe, in-scope part only):** the debrief block's
+`except Exception: pass` — a silent swallow that would have left the user in an
+empty room with no message even once the hang is fixed — now logs the exception
+and sends the client an error frame.
+
+**NOT fixed:** the hang itself. The fix lives in the shutdown sequencing around
+`run_live` — i.e. inside the voice-pipeline core this round's fix order
+explicitly declared tabu. Changing it unilaterally at feature-freeze, on the
+one part of the system that took two rounds to get working, is the user's call,
+not the builder's. The shape of the fix is small and does not touch audio
+handling or `SpeechConfig`: stop awaiting both tasks together — await the
+upstream task, then cancel the downstream task after a short grace period, so
+the handler reaches its `finally`.

@@ -856,6 +856,11 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str) -> None:
                             )
                         )
 
+            if TRANSCRIPT_DIAG and (event.turn_complete or event.interrupted):
+                logger.warning(
+                    "TDIAG %s turn_complete=%s interrupted=%s wit_len=%d",
+                    session_id, event.turn_complete, event.interrupted, len(current_witness_text),
+                )
             if event.turn_complete and current_witness_text:
                 new_lines = [
                     f"Examiner: {pending_examiner_text}",
@@ -874,6 +879,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str) -> None:
     try:
         await asyncio.gather(upstream_task(), downstream_task(), return_exceptions=True)
     finally:
+        logger.info("[%s] session loop returned, building debrief", session_id)
         live_request_queue.close()
         try:
             transcript = "\n".join(transcript_lines) or "(no exchanges recorded)"
@@ -908,4 +914,14 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str) -> None:
             await websocket.send_text(json.dumps({"type": "debrief", **debrief_payload}))
             await firestore_store.save_debrief(session_id, debrief_payload)
         except Exception:
-            pass
+            # This used to be a bare `pass`: if the debrief failed for any
+            # reason the browser was left in the room forever with no message
+            # and no way to know the session had ended. Log it, and tell the
+            # client something went wrong so it can say so.
+            logger.exception("[%s] debrief build/send failed", session_id)
+            try:
+                await websocket.send_text(
+                    json.dumps({"type": "error", "message": "The debrief couldn't be built for this session."})
+                )
+            except Exception:
+                pass
