@@ -242,11 +242,26 @@
      pair centers the content only while there is free space (auto margins
      resolve to 0 once space goes negative, so nothing is ever pushed above
      scrollTop 0 — the same trap that made the case grid unreachable). */
+  /* BUG 1 (round 4, user finding): this used to grow with the turn and rely
+     on `.room-main` itself scrolling once content overflowed — which is
+     exactly what made the whisper line (rendered last, at the bottom of the
+     flex column) disappear the moment a user scrolled to read a long turn.
+     The room no longer scrolls as a whole: every child below gets a fixed,
+     viewport-height-aware budget (via the media queries below) so the whole
+     stack — avatar through the End button — fits at 700-1080px window
+     heights without ever engaging this scrollbar. It stays as a safety net
+     for genuinely extreme content (Probe 7's 10,000-character stress case),
+     not the mechanism ordinary sessions rely on. */
   .room-main {
     flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-start;
-    gap: 36px; padding: 40px; position: relative;
+    gap: 28px; padding: 28px 40px; position: relative;
     min-height: 0; overflow-y: auto; overflow-x: hidden;
   }
+  /* Visually centers the stack when there's slack, same as before — but
+     auto margins resolve to 0 the instant space goes negative, so on a
+     viewport too small even for the compact budget below, content still
+     anchors to scrollTop 0 instead of being pushed above the fold on both
+     ends (the round-3 trap this file's history already names). */
   .room-main > *:first-child { margin-top: auto; }
   .room-main > *:last-child { margin-bottom: auto; }
   .room-main::before {
@@ -254,38 +269,61 @@
     background: radial-gradient(ellipse 60% 100% at 50% 0%, rgba(176, 141, 87, 0.06), rgba(11, 12, 14, 0));
     pointer-events: none;
   }
-  .witness-block { display: flex; flex-direction: column; align-items: center; gap: 18px; min-height: 0; max-width: 100%; }
+  .witness-block { display: flex; flex-direction: column; align-items: center; gap: 14px; min-height: 0; max-width: 100%; }
   .avatar {
-    width: 120px; height: 120px; border-radius: 50%; border: 1px solid #35342f; background: var(--surface-2);
+    width: 96px; height: 96px; border-radius: 50%; border: 1px solid #35342f; background: var(--surface-2);
     display: flex; align-items: center; justify-content: center; box-shadow: 0 0 60px rgba(176, 141, 87, 0.07);
-    font-size: 40px; font-weight: 500; color: var(--text-2);
+    font-size: 34px; font-weight: 500; color: var(--text-2); flex: none;
   }
+  .waveform { flex: none; }
   .waveform path { transition: opacity 0.3s; }
   .waveform.live { animation: waveform-pulse 1.6s ease-in-out infinite; }
   @keyframes waveform-pulse { 0%, 100% { opacity: 0.85; } 50% { opacity: 1; } }
 
-  /* BUG 4: bounded and self-scrolling. A turn of any length now scrolls
-     inside this box; it can no longer grow the room and push the controls
-     out of reach. 38vh leaves room for the avatar, the dial and the End
-     button at every viewport height we tested. */
+  /* BUG 1: a fixed height (not content-dependent) is what makes the rest of
+     the layout deterministic — the room's total height no longer depends on
+     how much has been said. app.js keeps transcriptView.scrollTop pinned to
+     scrollHeight on every update, so this reads as a teleprompter: the
+     current line stays put, older lines scroll up and off the top instead
+     of the box growing to fit them. The top mask fades the line that's
+     about to scroll out instead of hard-clipping it mid-character. No
+     scrollbar is shown — nothing here is meant to be scrolled by hand. */
   .transcript {
     max-width: 660px; text-align: center; display: flex; flex-direction: column; gap: 10px;
-    min-height: 4.5em; max-height: 38vh; overflow-y: auto; overflow-x: hidden;
-    flex: 0 1 auto; width: 100%; scrollbar-width: thin;
+    height: clamp(84px, 21vh, 168px); overflow-y: auto; overflow-x: hidden;
+    flex: none; width: 100%; scrollbar-width: none;
+    scroll-behavior: smooth;
+    mask-image: linear-gradient(to bottom, transparent, black 22px, black 100%);
+    -webkit-mask-image: linear-gradient(to bottom, transparent, black 22px, black 100%);
   }
+  .transcript::-webkit-scrollbar { display: none; }
   .transcript .examiner-line { font-size: 12.5px; color: #9db4c0; }
-  .transcript .witness-line { font-size: 25px; line-height: 1.4; color: var(--text-1); }
+  .transcript .witness-line { font-size: clamp(18px, 2.6vh, 25px); line-height: 1.4; color: var(--text-1); }
   .transcript .interrupt-status {
     font-size: 11.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); min-height: 1.4em;
   }
   /* ---------- FEATURE 2: "counsel's whisper" — a quiet aside, never a chat bubble ---------- */
+  /* BUG 1: always in the flow (no more `[hidden]` toggling display:none) so
+     it reserves its own height whether or not there's a whisper to show
+     right now — that reserved slot is what stops the dial/End-button row
+     from jumping every time a whisper appears or clears. padding-top and
+     border-top are part of the box in EVERY state (idle/pending/filled) —
+     only the border's color changes — so the box height truly never moves;
+     an idle slot is a transparent line, not a removed one. */
   .whisper-line {
-    max-width: 520px; text-align: center; font-size: 13px; font-style: italic; color: var(--text-4);
-    padding-top: 4px; border-top: 1px dashed var(--line-2); margin-top: 4px;
+    max-width: 520px; width: 100%; min-height: 2.4em; text-align: center;
+    font-size: 13px; font-style: italic; color: var(--text-4); margin-top: 4px;
+    padding-top: 4px; border-top: 1px dashed transparent;
+    display: flex; align-items: center; justify-content: center; flex: none;
   }
-  .whisper-line::before { content: "counsel's whisper — "; font-style: normal; color: var(--text-5); }
+  .whisper-line:not(:empty) { border-top-color: var(--line-2); }
+  .whisper-line:not(:empty)::before { content: "counsel's whisper — "; font-style: normal; color: var(--text-5); }
+  /* BUG 3 (P2): a quiet pending state in the same reserved slot, while a
+     whisper is expected but hasn't arrived yet — no spinner, no blink. */
+  .whisper-line.pending { color: var(--text-5); border-top-color: var(--line-2); }
+  .whisper-line.pending::before { content: "counsel is thinking…"; font-style: italic; color: var(--text-5); }
 
-  .dial-block { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+  .dial-block { display: flex; flex-direction: column; align-items: center; gap: 8px; flex: none; }
   .dial-block .caption { font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-4); }
   .dial-row { display: flex; align-items: center; gap: 14px; }
   .dial-row .end-label { font-size: 12px; color: var(--text-4); }
@@ -317,6 +355,28 @@
   }
   .end-btn:hover { border-color: #666; }
   .end-btn .label { font-size: 15px; }
+
+  /* BUG 1: measured budget for the room's fixed-size children (header,
+     avatar, waveform, dial block, End button, gaps/padding) against a
+     700px-tall window with the .transcript/.whisper-line clamps above —
+     comfortably inside 700px with the waveform's decorative pulse dropped
+     first, since it's the one element here that's pure ornament. Checked at
+     1080/900/800/700px window heights per the round's acceptance probes. */
+  @media (max-height: 760px) {
+    header { padding: 10px 32px; }
+    .room-main { padding: 14px 40px; gap: 16px; }
+    .witness-block { gap: 8px; }
+    .avatar { width: 64px; height: 64px; font-size: 24px; }
+    .waveform { display: none; }
+    .transcript { height: clamp(64px, 18vh, 120px); }
+    .transcript .witness-line { font-size: clamp(16px, 2.4vh, 21px); }
+    .dial-block { gap: 4px; }
+    .refocus-row { margin-top: 0; }
+  }
+  @media (max-height: 620px) {
+    .avatar { display: none; }
+    .transcript { height: clamp(56px, 16vh, 96px); }
+  }
 
   .sidebar {
     width: 360px; border-left: 1px solid var(--line-1); background: var(--surface-3);
@@ -438,7 +498,7 @@
       <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="#e8e6e1" stroke-width="1.4"><rect x="6.5" y="1.8" width="5" height="9" rx="2.5"></rect><path d="M3.5 8.5a5.5 5.5 0 0 0 11 0"></path><path d="M9 14v2.4"></path></svg>
       <span class="label">Take the stand.</span>
     </button>
-    <div class="sans start-hint">Voice session · you can interrupt the witness at any time</div>
+    <div class="sans start-hint" id="startHint">Voice session · you can interrupt the witness at any time</div>
     <div class="sans" id="statusMsg" role="alert"></div>
     <!-- DECISION 9 (round 3, user's call): "Watch a replayed session" removed
          as a product entry point. The replay only ever showed the AI's half of
@@ -491,11 +551,11 @@
         </g>
       </svg>
       <div class="transcript" id="transcriptView"></div>
-      <div class="whisper-line sans" id="whisperLine" hidden></div>
+      <div class="whisper-line sans" id="whisperLine"></div>
     </div>
 
     <div class="dial-block">
-      <div class="sans caption">Witness pressure</div>
+      <div class="sans caption" id="pressureCaption">Witness pressure</div>
       <div class="dial-row sans">
         <div class="end-label">Cooperative</div>
         <div class="dial-segments" id="dialSegments">

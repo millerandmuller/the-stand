@@ -74,6 +74,7 @@ const gridBoardroom = document.getElementById("gridBoardroom");
 const gridOwn = document.getElementById("gridOwn");
 const uploadInput = document.getElementById("uploadInput");
 const startBtn = document.getElementById("startBtn");
+const startHint = document.getElementById("startHint");
 const statusMsg = document.getElementById("statusMsg");
 const disclaimerEl = document.getElementById("disclaimer");
 
@@ -83,6 +84,7 @@ const avatarInitials = document.getElementById("avatarInitials");
 const waveform = document.getElementById("waveform");
 const transcriptView = document.getElementById("transcriptView");
 const dialSegments = document.getElementById("dialSegments");
+const pressureCaption = document.getElementById("pressureCaption");
 const refocusInput = document.getElementById("refocusInput");
 const refocusBtn = document.getElementById("refocusBtn");
 const refocusStatus = document.getElementById("refocusStatus");
@@ -128,6 +130,7 @@ let playHead = 0;
 let runningScore = 0;
 let selectedCaseId = null;
 let cases = [];
+let activeRoleWord = "witness"; // BUG 4: the room's word for "whoever's in the other chair", set per case
 let sessionStartMs = 0;
 let clockTimer = null;
 let examinerAccum = "";
@@ -240,6 +243,24 @@ function gridForCase(c) {
   return gridCourtroom; // Civil, Deposition, ... — the cross-examination cases
 }
 
+// BUG 4 (round 4): "witness" is the Courtroom's word, not a generic term for
+// whoever's in the other chair — a Boardroom discovery call has a buyer, a
+// dissertation defense has a committee. One word per case type, defined
+// here (same branching as gridForCase, so a case is never routed to one
+// section but labeled for another), used everywhere the room refers to the
+// other party generically rather than by their specific case-file role.
+function roleWordFor(c) {
+  if (!c) return "witness"; // nothing selected yet — the Courtroom default
+  const type = (c.case_type || "").toLowerCase();
+  if (c.uploaded || type.includes("defense")) return "committee";
+  if (type.includes("sparring")) return "buyer";
+  return "witness";
+}
+
+function capitalize(word) {
+  return word.charAt(0).toUpperCase() + word.slice(1);
+}
+
 function renderCaseGrid() {
   gridCourtroom.innerHTML = "";
   gridBoardroom.innerHTML = "";
@@ -342,6 +363,12 @@ function renderCaseGrid() {
   }
   if (uploadModes.length) renderUploadCard();
   placeStartBlock();
+  // BUG 4: the pre-session hint word follows whichever case is selected
+  // (defaults to "witness" — the Courtroom word — with nothing selected).
+  if (startHint) {
+    const selected = cases.find((c) => c.case_id === selectedCaseId);
+    startHint.textContent = `Voice session · you can interrupt the ${roleWordFor(selected)} at any time`;
+  }
 }
 
 // ---------- FEATURE 6: "Take the stand." follows the selected card ----------
@@ -413,13 +440,16 @@ async function openBriefing(caseId, role) {
       throw new Error(body.detail || `couldn't load the briefing (${res.status})`);
     }
     const b = await res.json();
+    // BUG 4: the non-reverse kicker used to hardcode "Witness" even in the
+    // Boardroom/Own-Case briefing panel.
+    const roleWord = capitalize(roleWordFor(cases.find((c) => c.case_id === caseId)));
     const focusBlock = b.focus
       ? `<div class="bp-section"><div class="kicker">Your focus</div><div class="body-text">${b.focus}${b.focus_note ? `<br><span class="muted">${b.focus_note}</span>` : ""}</div></div>`
       : "";
     briefingBody.innerHTML = `
       <div class="bp-section"><div class="kicker">Case</div><div class="body-text">${b.case_name}</div><div class="body-text muted">${b.summary}</div></div>
       <div class="bp-section"><div class="kicker">Your role</div><div class="body-text">${b.user_role || "—"}</div></div>
-      <div class="bp-section"><div class="kicker">${b.reverse ? "Who you're up against" : "Witness"}</div><div class="body-text">${b.counterpart_role}${b.counterpart_disposition ? ` <span class="muted">· ${b.counterpart_disposition}</span>` : ""}</div></div>
+      <div class="bp-section"><div class="kicker">${b.reverse ? "Who you're up against" : roleWord}</div><div class="body-text">${b.counterpart_role}${b.counterpart_disposition ? ` <span class="muted">· ${b.counterpart_disposition}</span>` : ""}</div></div>
       <div class="bp-section"><div class="kicker">Affidavit</div><div class="body-text">${b.affidavit || "—"}</div></div>
       ${focusBlock}
     `;
@@ -755,21 +785,45 @@ function renderTranscript() {
 
 function showInterrupted() {
   const el = document.getElementById("interruptStatus");
-  if (el) el.textContent = "Interrupted — witness yields";
+  if (el) el.textContent = `Interrupted — ${activeRoleWord} yields`;
 }
 
 // ---------- FEATURE 2: Whisper mode ("counsel's whisper") ----------
+// BUG 1 (round 4): whisperLine is always in the DOM flow now (no more
+// `hidden` toggling display:none) so its reserved slot never collapses —
+// see the .whisper-line CSS. Showing/clearing just changes its text/class.
+let whisperPendingTimer = null;
+// BUG 3 (round 4): comfortably above the ~2-3s scorer latency the brief
+// documents (rubric_scorer/scorer.py's module docstring) — a real measured
+// number wasn't feasible this round without a live mic session (see
+// DIRECTORS_NOTES, logged as a GAP rather than guessed).
+const WHISPER_PENDING_TIMEOUT_MS = 6000;
+
 function showWhisper(text) {
   if (!whisperLine) return;
+  clearTimeout(whisperPendingTimer);
+  whisperLine.classList.remove("pending");
   whisperLine.textContent = text || "";
-  whisperLine.hidden = !text;
 }
 
 function clearWhisper() {
-  if (whisperLine) {
-    whisperLine.textContent = "";
-    whisperLine.hidden = true;
-  }
+  if (!whisperLine) return;
+  clearTimeout(whisperPendingTimer);
+  whisperLine.classList.remove("pending");
+  whisperLine.textContent = "";
+}
+
+// BUG 3: a quiet placeholder in the reserved whisper slot while this
+// exchange's scoring call is presumably in flight. Auto-clears on a timeout
+// because a turn with nothing rubric-worthy never sends a whisper message
+// at all — there's no positive "done, nothing to say" signal to wait for.
+function armWhisperPending() {
+  if (!whisperLine || !whisperEnabled) return;
+  clearTimeout(whisperPendingTimer);
+  whisperLine.classList.add("pending");
+  whisperPendingTimer = setTimeout(() => {
+    whisperLine.classList.remove("pending");
+  }, WHISPER_PENDING_TIMEOUT_MS);
 }
 
 function renderWhisperToggle() {
@@ -1004,6 +1058,9 @@ function connectWS() {
           clearWhisper(); // FEATURE 2: a whisper is only relevant to the exchange it was suggested for
           examinerAccum = msg.replace ? msg.text : examinerAccum + msg.text;
         } else if (msg.role === "witness") {
+          // BUG 3: first content of a fresh witness turn — the exchange is
+          // now underway, so a whisper for it may arrive shortly.
+          if (!witnessAccum) armWhisperPending();
           witnessAccum = msg.replace ? msg.text : witnessAccum + msg.text;
         }
         renderTranscript();
@@ -1067,6 +1124,10 @@ refocusInput.addEventListener("keydown", (e) => {
 // ---------- start / end ----------
 async function beginSession() {
   sessionReverse = reverseSelected;
+  // BUG 4: computed once, up front, so the room's copy (pressure caption,
+  // interrupt status, reconnect message) all agree on the same word for the
+  // whole session — set before the first place that can need it.
+  activeRoleWord = roleWordFor(cases.find((c) => c.case_id === selectedCaseId));
   closeBriefing();
   audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   playHead = audioCtx.currentTime;
@@ -1076,7 +1137,7 @@ async function beginSession() {
     await connectWS();
   } catch (err) {
     showStatus(
-      "Reconnecting — the witness keeps his composure. (" + (err && err.message ? err.message : err) + ")"
+      "Reconnecting — the " + activeRoleWord + " keeps their composure. (" + (err && err.message ? err.message : err) + ")"
     );
     return;
   }
@@ -1101,6 +1162,9 @@ async function beginSession() {
     ? `${selected.case_name} · ${sessionReverse ? "reverse — " + verb + " " : verb + " "}${counterpartName}`
     : "";
   avatarInitials.textContent = selected ? initialsFor(counterpartName || "--") : "--";
+  // BUG 4: "Witness pressure" only in the Courtroom — Boardroom gets
+  // "Buyer pressure", Defense/BYOC gets "Committee pressure".
+  if (pressureCaption) pressureCaption.textContent = `${capitalize(activeRoleWord)} pressure`;
 
   // F18: reverse mode annotates the AI's technique instead of scoring the
   // user — relabel the sidebar so it reads as a live technique log, not a
