@@ -146,3 +146,221 @@
 ## Regression (this round)
 
 - `tests/test_case_language_handshake.py` + full `pytest -q` suite, privacy-scoping (owner-token), reverse-mode toggles, briefing-panel links, and the F22 replay path are all outside this round's diff surface (server core untouched, case files untouched) — re-run and confirmed green/unchanged as part of the Examine phase below.
+
+---
+
+# Round 3 of the microphone fixes — 2026-08-31
+
+> Source: `build-prompts/fixes-mic-round-3.md`, a real microphone pass against
+> `the-stand-00017-f2d`. Voice-pipeline server core (`run_live`, audio
+> up/downstream, `SpeechConfig`) tabu again this round — confirmed untouched.
+>
+> **BUG 2 and BUG 3 were on their third attempt.** Both had been declared fixed
+> in round 2 and both were still broken. The fix order forbade a third blind
+> patch after reading the code, and required instrumentation first. That is what
+> happened, and it changed both diagnoses — the round-2 fixes were not merely
+> incomplete, they were aimed at the wrong thing.
+
+## BUG 1 — Empty uploads invented whole cases (honesty P1)
+
+**Measured:** `witness_agent/case_generator.py` checked only the *upper* size
+bound. An empty file went to the model with no document content, and the model
+filled the vacuum: a complete "Doctoral Dissertation Defense Examination" with
+committee and methodology attack lines from zero bytes, presented under this
+product's citation rubric. That contradicts the single claim the whole product
+stands on.
+
+**Fixed:** a pre-generation gate, `assert_document_has_substance()`, that
+extracts text (native decode for text formats, `pypdf` text-layer extraction
+for PDFs) and refuses before the model is ever called. HTTP 422, plain-language
+message rendered on the upload card, no case, no grid entry, no template
+fallback. The existing `focus_note` cite-or-GAP path is untouched — this is the
+stage before it.
+
+**Threshold rationale (as required by the fix order):** `MIN_DOCUMENT_CHARS =
+400` **and** `MIN_DOCUMENT_WORDS = 50`, both must be met. It sits there because
+the generator is asked for *cited* attack lines: below roughly one substantial
+paragraph there is nothing left for a citation to point at, so anything the
+model returns is necessarily invention. Real uploads (a dissertation chapter, a
+proposal, a product brief) clear this by one to three orders of magnitude, so
+the gate is invisible to legitimate use. The asymmetry is deliberate: rejecting
+one thin-but-real document costs a re-upload, accepting one empty document costs
+the product's credibility. **We only ever refuse on positive evidence** — a
+format this module cannot extract (e.g. `.docx`) is passed through to the model
+exactly as before, so the gate can never start rejecting real documents it
+simply failed to read.
+
+**Regression:** `tests/test_upload_substance_gate.py` — empty / whitespace-only
+/ image-only-PDF (a real generated PDF with an image and no text layer) across
+both modes, driven through the real HTTP upload route, asserting both the
+refusal *and* that `generate_case_content` is never reached and the case cache
+is unchanged. Plus the counter-test that a real document still passes.
+
+## BUG 2 — Doubled transcript: the captured chunks
+
+**Instrumented first.** `THE_STAND_TRANSCRIPT_DIAG=1` (new, off by default)
+logs every raw `input_transcription`/`output_transcription` chunk with the
+accumulated state around it. A real reverse-mode session against
+`sales_discovery_call` produced the shape that was doubling the screen:
+
+    accumulated (612 chars): "...limited slots open for installations this quarter, I wanted to make..."
+    final chunk (615 chars): "...limited slots open for installations this quarter, so I wanted to make..."
+
+    chunk in accumulated      -> False
+    chunk.startswith(accum)   -> False
+    difflib similarity        -> 0.9976
+    word-level diff           -> exactly one insertion: "so"
+
+At turn end the Live API re-sends the **entire turn as one chunk, lightly
+revised** now that it has heard the whole utterance. That chunk is neither a
+substring of the accumulation nor prefixed by it, so *both* of round 2's checks
+necessarily missed it and it fell into the `accumulated + chunk` branch —
+printing the whole turn twice. This is exactly what the user's screenshots
+showed ("comes around 500k" / "comes in around 500k", "I figured" / "so I
+figured"). **The round-2 fix could not have caught this case by construction**,
+which is why it read convincingly and failed anyway.
+
+**Fixed** in two parts, as the fix order specified:
+1. `_reconcile_transcript_chunk()` gained a fourth case — a normalized-similarity
+   restatement check (`_is_restatement`: punctuation/case-insensitive, a 0.6
+   length-ratio floor so a short delta can never be mistaken for a re-send, and
+   a 0.82 `difflib` similarity floor). A restatement **replaces** the turn.
+2. The protocol changed, because replacing requires the client to be able to
+   replace: the transcript message now carries `"replace": bool`, and on
+   `replace: true` the server sends the **full corrected turn** and the client
+   swaps the node instead of `+=`. Delta-level half-measures had failed twice.
+
+Both directions use the identical function, so the YOU line is covered as well —
+the screenshots show the input side was equally affected. `transcript_lines`
+(scorer + debrief + download) is built from the same reconciled variables, so
+that path is fixed by the same change rather than by a parallel one.
+
+**Verified live, 4 sessions, EN and DE, forward and reverse:** `replace=true`
+fired once per session at turn end, and the on-screen turn appears exactly once
+in every case (witness line and YOU line both). Captured chunks are pinned in
+`tests/test_transcript_reconcile.py`, including a guard test that asserts
+neither old check would have matched — so that test can never pass for the
+wrong reason.
+
+## BUG 3 + BUG 4 — One root cause, and it was never the audio code
+
+**Measured, not read.** A diagnostic mode (`?diag=1`, off by default) counts
+AudioContexts, taps the real output graph with a pass-through `AnalyserNode`
+(production routing byte-for-byte unchanged), samples output RMS every 20 ms,
+and records every `playPcm16`/stop call with the state live at that moment. Then
+a real session, with a real WAV fed through Chromium's fake capture device.
+
+What the instrumentation ruled **out** — every hypothesis in the fix order:
+
+| Hypothesis | Measurement | Verdict |
+|---|---|---|
+| (a) second AudioContext | `ctxCount == 1` in every run | ruled out |
+| (b) `sessionEnded` reset after end | no reset observed post-`end_session` | ruled out |
+| (c) a second playback path | 100% of frames go through `playPcm16` | ruled out |
+| (e) server keeps streaming | `0` audio frames arrive after the click | ruled out |
+| **(d) the handler never fires** | see below | **confirmed** |
+
+And what it ruled **in**: when `endSessionNow()` actually runs, the stop works
+perfectly — 58 scheduled sources killed, measured output RMS **0.43 → 0 inside
+one 20 ms sample**, zero loud samples in the following 4 seconds. *The silence
+code was never the bug.* Two rounds were spent fixing code that was correct.
+
+The real cause is layout, and it is the same defect as BUG 4. `.room-main` was
+`justify-content: center` with the default `overflow: visible` and no
+`min-height: 0` — so a turn taller than the room overflowed the box **in both
+directions**. `document.elementFromPoint()` at real viewport sizes, with the
+doubled turn from BUG 2 on screen:
+
+| Viewport | Whisper button — element actually on top | "End session." |
+|---|---|---|
+| 1440x900, doubled turn | `DIV.witness-block` (transcript) | y=1005 in a 900px viewport — **below the fold, `elementFromPoint` returns nothing** |
+| 1280x800, single turn | `#avatarInitials` | y=797, cut off |
+| 1280x800, doubled turn | `svg#waveform` | y=955 — off-screen |
+| 1512x982, doubled turn | `#avatarInitials` | y=1046 — off-screen |
+| 1280x620, doubled turn | `DIV.witness-line` | y=865 — off-screen |
+
+So the Whisper toggle was **buried, not broken** — exactly the hypothesis in the
+fix order, now confirmed by hit test, and exactly what the screenshot shows. And
+"End session." was pushed past the bottom of the window, reachable only by
+scrolling 145px first. A click where the user expects the button lands on
+nothing, `endSessionNow()` never runs, `sessionEnded` stays false, and the
+client plays out everything already buffered — which the instrumentation
+measured at **up to 24.3 seconds queued ahead across 80 scheduled sources**.
+That is "the AI keeps talking".
+
+It also explains the correlation the user noticed: Whisper worked in the shorter
+Rheinwerk session and not in the longer Vantage one. Short transcript, no
+overflow; doubled transcript, overflow. BUG 2 was feeding BUG 4 and BUG 3.
+
+**Fixed structurally, once:** `.room-main` gets `min-height: 0` and
+`overflow-y: auto`, `justify-content: flex-start` plus an auto-margin pair
+(`> *:first-child { margin-top: auto }` / `> *:last-child { margin-bottom:
+auto }`) so content is centered only while there is free space — auto margins
+resolve to 0 once space goes negative, so nothing is ever pushed above
+`scrollTop: 0` (the same trap that made the case grid unreachable in round 7).
+The transcript itself is now bounded and self-scrolling (`max-height: 38vh;
+overflow-y: auto`) with auto-scroll-to-bottom, so a turn of any length scrolls
+inside its own region and can never grow the room.
+
+**Re-measured after the fix, all 8 configurations** (4 viewport sizes x
+single/doubled turn): every header control reachable (`elementFromPoint`
+returns the control itself), "End session." in the viewport in all 8,
+`scrollHeight == clientHeight` everywhere — no overflow at all. And live:
+**0 ms of audible output after the click in all four EN/DE forward/reverse
+sessions** (0 loud samples out of ~200, 20 ms resolution — well inside the
+0.3 s requirement).
+
+**Still needs a human ear.** The instrumentation proves silence at the audio
+graph in headless Chromium. It cannot prove what a speaker on a real machine
+does in the last few milliseconds of hardware buffer. Per the acceptance
+criterion, one of the three reproductions must be confirmed by a human with
+ears, on the deployed revision — that is the one step no agent here can take.
+
+## FEATURE 5 — Whisper explains itself
+
+Line under the toggle: **"Stuck? It suggests your next question."** Quiet
+register, same family as the `counsel's whisper` line, not a tooltip (the user
+never found the tooltip). Default still OFF.
+
+**Writeup candidate (Collaborative-Partner track):** the button is literally a
+partner that leans over and suggests your next move when you're stuck — that
+sentence is close to the track's own language and is a candidate for the
+submission text.
+
+## FEATURE 6 — "Take the stand." follows the selected case
+
+The start block moves into the grid, onto the row directly beneath the selected
+card and aligned to that card's column, and moves with the selection. With no
+selection it returns to its original place under the grid. Column count is read
+from the computed grid at render time and recomputed on resize, so the mobile
+breakpoints stay intact.
+
+## FEATURE 7 — Delete your own upload
+
+`DELETE /api/cases/{case_id}`, ownership enforced **server-side**, reusing
+`UploadedCaseStore.delete_case()` (the same path as `server/admin_prune_case`,
+not a second implementation) and additionally dropping the in-process cache
+entry, which the admin CLI cannot reach. A wrong or absent token gets the same
+404 as an unknown id, so the endpoint can't be used to probe which upload ids
+exist; a curated case is never deletable (403). Confirmation prompt before the
+delete.
+
+## FEATURE 8 — Transcript download in the technique column
+
+The debrief now keeps the technique/rubric column that stood beside the session
+(same `[T-xx]`/`[S-xx]` annotation lines, same label, same total), and the
+download sits at the foot of it — where the user looked for it. Same
+`downloadTranscript()`, same file: verified byte-identical to the existing
+debrief button's download. The original button stays.
+
+## DECISION 9 — "Watch a replayed session" withdrawn as a product entry
+
+Removed from case selection (user's call: the replay shows only the AI's half,
+so as a shop window it misrepresents a sparring product, and a juror who clicks
+it hears a monologue). `replay.js` no-ops without the button, by its own
+existing guard.
+
+**Explicitly NOT touched:** `eval/eval_sets/live_audio_witness`, the recorded
+bundle and the playback screenshot all stay in the repo. They remain the
+engineering proof for the Live-audio eval and are cited as such in the writeup.
+F22 is withdrawn as a *product entry point*, not as *evidence*.

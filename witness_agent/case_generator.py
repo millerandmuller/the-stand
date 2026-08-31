@@ -140,6 +140,141 @@ class GenerationFailedError(RuntimeError):
     """Raised when Gemini's response can't be parsed into the case schema."""
 
 
+class UnreadableDocumentError(ValueError):
+    """Raised when the upload has no readable text to build a case from.
+
+    BUG 1 (round 3): before this existed, the only upload check was the
+    MAX_UPLOAD_BYTES ceiling. An empty file, a whitespace-only file, or an
+    image-only PDF went straight into the model, which did what models do
+    with an empty prompt — it invented a whole case (a full "Doctoral
+    Dissertation Defense Examination" with committee and methodology attack
+    lines, from zero bytes). That directly contradicts the one claim this
+    product is built on: cite-or-GAP, every line cites its source. A case
+    that came from nothing cannot cite anything, so it must never be built
+    at all — no silent template fallback, no case in the grid, a plain-text
+    refusal on the upload card instead.
+    """
+
+
+# --- BUG 1: what counts as "enough document to build a case from" ---------
+# Deliberately conservative — the cost of rejecting one thin-but-real
+# document is that the user picks a better file; the cost of accepting one
+# empty document is a fabricated case with a citation rubric on it, which is
+# the single worst thing this product can do. Both thresholds must be met.
+#
+# 400 characters / 50 words is roughly one substantial paragraph. It is set
+# where it is because the generator is asked for cited attack lines: below
+# about a paragraph there is nothing left for a citation to point AT, so
+# anything the model returns is necessarily invention. Real uploads (a
+# dissertation chapter, a product brief, a proposal) clear this by one to
+# three orders of magnitude, so the gate is invisible to legitimate use.
+MIN_DOCUMENT_CHARS = 400
+MIN_DOCUMENT_WORDS = 50
+
+_TEXTUAL_MIME_PREFIXES = ("text/",)
+_TEXTUAL_MIME_TYPES = (
+    "application/json",
+    "application/xml",
+    "application/rtf",
+    "application/x-tex",
+)
+
+_UNREADABLE_MESSAGE = (
+    "No case can be built from this document — it contains no readable text."
+)
+_TOO_THIN_MESSAGE = (
+    "No case can be built from this document — there is too little readable "
+    "text in it to ground a single cited question."
+)
+
+
+def _pdf_text(file_bytes: bytes) -> str:
+    """Best-effort text-layer extraction from a PDF.
+
+    Only used to answer one question — is there a text layer at all, and is
+    it substantial? — never to build the case (the document itself still
+    goes to the model as inline data, unchanged). A scanned/image-only PDF
+    has no text layer and correctly yields "".
+    """
+    try:
+        from pypdf import PdfReader
+    except ImportError:  # pragma: no cover - dependency is pinned in requirements.txt
+        # Without an extractor we cannot prove the PDF is empty, and refusing
+        # a real document is worse than the status quo here — fall back to
+        # "unknown", which the caller treats as "let it through".
+        return _UNKNOWN
+    import io
+
+    try:
+        reader = PdfReader(io.BytesIO(file_bytes))
+        # 30 pages is far past the point where the answer can still change.
+        pages = reader.pages[:30]
+        return "\n".join((p.extract_text() or "") for p in pages)
+    except Exception:
+        # Malformed/encrypted PDF: we genuinely don't know what's in it.
+        return _UNKNOWN
+
+
+# Sentinel distinct from "" (proven empty) — means "could not determine".
+_UNKNOWN = "\x00__extraction_unavailable__"
+
+
+def extract_document_text(file_bytes: bytes, mime_type: str, filename: str = "") -> str:
+    """Returns the document's readable text, "" if it provably has none, or
+    the _UNKNOWN sentinel when this function can't tell (in which case the
+    caller must not reject — we only ever refuse on positive evidence)."""
+    if not file_bytes:
+        return ""
+    mime = (mime_type or "").split(";")[0].strip().lower()
+    name = (filename or "").lower()
+
+    if mime == "application/pdf" or name.endswith(".pdf"):
+        return _pdf_text(file_bytes)
+
+    if mime.startswith(_TEXTUAL_MIME_PREFIXES) or mime in _TEXTUAL_MIME_TYPES or name.endswith(
+        (".txt", ".md", ".markdown", ".csv", ".json", ".rtf")
+    ):
+        for encoding in ("utf-8", "utf-16", "latin-1"):
+            try:
+                return file_bytes.decode(encoding)
+            except (UnicodeDecodeError, UnicodeError):
+                continue
+        return ""
+
+    # Some other binary format (image, docx, …). We can't read it here, and
+    # guessing would mean rejecting real documents — leave the verdict open.
+    return _UNKNOWN
+
+
+def _readable_stats(text: str) -> tuple[int, int]:
+    """(character count, word count) over printable, non-whitespace content."""
+    cleaned = "".join(ch if ch.isprintable() else " " for ch in text)
+    words = [w for w in cleaned.split() if any(c.isalnum() for c in w)]
+    chars = sum(len(w) for w in words)
+    return chars, len(words)
+
+
+def assert_document_has_substance(
+    file_bytes: bytes, mime_type: str, filename: str = ""
+) -> None:
+    """BUG 1 gate. Raises UnreadableDocumentError when the upload provably
+    has no (or almost no) readable text. Never raises on an extraction we
+    couldn't perform — a document we can't read here still goes to the model,
+    exactly as before, so this can only ever add refusals we can prove."""
+    if not file_bytes or not file_bytes.strip():
+        raise UnreadableDocumentError(_UNREADABLE_MESSAGE)
+
+    text = extract_document_text(file_bytes, mime_type, filename)
+    if text == _UNKNOWN:
+        return
+    if not text.strip():
+        raise UnreadableDocumentError(_UNREADABLE_MESSAGE)
+
+    chars, words = _readable_stats(text)
+    if chars < MIN_DOCUMENT_CHARS or words < MIN_DOCUMENT_WORDS:
+        raise UnreadableDocumentError(_TOO_THIN_MESSAGE)
+
+
 @dataclass
 class GeneratedCaseContent:
     title: str

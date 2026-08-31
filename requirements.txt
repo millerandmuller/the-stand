@@ -1,5 +1,8 @@
 google-adk[eval]==2.8.0
 pyyaml>=6.0
+# BUG 1: text-layer extraction, used only to prove an upload has readable
+# content before a case is generated from it (never to build the case).
+pypdf>=5.1
 python-dotenv>=1.0
 fastapi>=0.115
 python-multipart>=0.0.12

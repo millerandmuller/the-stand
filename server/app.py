@@ -19,7 +19,15 @@ Message contract, browser -> server (JSON text frames on /ws/{session_id}):
 
 Message contract, server -> browser:
   {"type": "audio", "data": "<base64 pcm16 @24kHz>"}
-  {"type": "transcript", "role": "examiner"|"witness", "text": "...", "partial": bool}
+  {"type": "transcript", "role": "examiner"|"witness", "text": "...", "partial": bool,
+   "replace": bool}
+      -- replace=false: "text" is the next delta, append it to the current turn.
+         replace=true:  "text" is the FULL corrected text of the current turn,
+                        swap the turn's node instead of appending. The Live API
+                        re-sends a whole turn with earlier words revised once it
+                        has heard the full utterance; a delta cannot express an
+                        edit in the middle, which is why appending doubled the
+                        transcript on screen (BUG 2).
   {"type": "interrupted"}  -- forwards the Live API's real LlmResponse.interrupted
                               signal (genuine barge-in, not a UI guess)
   {"type": "score", "events": [{"criterion","dxx","triggered","violation","note","score_delta"}]}
@@ -36,8 +44,10 @@ no owner and stay visible to everyone.
 
 import asyncio
 import base64
+import difflib
 import json
 import logging
+import os
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -73,8 +83,10 @@ from witness_agent.agent import (
 )
 from witness_agent.case_generator import (
     GenerationFailedError,
+    UnreadableDocumentError,
     UnsupportedModeError,
     UploadTooLargeError,
+    assert_document_has_substance,
     build_case_dict,
     generate_case_content,
 )
@@ -82,6 +94,30 @@ from witness_agent.case_generator import (
 APP_NAME = "the_stand"
 STATIC_DIR = Path(__file__).parent / "static"
 logger = logging.getLogger("the_stand.app")
+
+# BUG 2 (round 3) diagnostic: dump every raw transcription chunk the Live API
+# emits, with the accumulated state around it, so the reconciliation logic can
+# be fixed against real chunk shapes instead of a hypothesis. Off by default —
+# only the session's own transcript chunks are ever logged here, never the
+# uploaded document's content (that stays forbidden by the leitplanken).
+TRANSCRIPT_DIAG = os.environ.get("THE_STAND_TRANSCRIPT_DIAG") == "1"
+
+
+def _diag_chunk(
+    session_id: str, role: str, accumulated: str, chunk: str, delta: str, replace: bool
+) -> None:
+    if not TRANSCRIPT_DIAG:
+        return
+    logger.warning(
+        "TDIAG %s role=%s replace=%s acc_len=%d chunk=%r acc=%r delta=%r",
+        session_id,
+        role,
+        replace,
+        len(accumulated),
+        chunk,
+        accumulated,
+        delta,
+    )
 
 # F16 mode templates: the curated escalation ladder + rubric an uploaded
 # case borrows from — never regenerated per-upload, only the persona's
@@ -105,33 +141,83 @@ uploaded_case_store = UploadedCaseStore()
 _uploaded_cases_cache: dict[str, dict] = {}
 
 
-def _reconcile_transcript_chunk(accumulated: str, chunk: str) -> tuple[str, str]:
-    """Merges a new input_transcription/output_transcription chunk into the
-    turn's running text and returns (new_accumulated, delta_to_send).
+def _normalize_for_compare(text: str) -> str:
+    """Lowercased, punctuation-free, single-spaced form used only to decide
+    whether two strings are the same utterance. Never sent anywhere."""
+    kept = [ch.lower() if (ch.isalnum() or ch.isspace()) else " " for ch in text]
+    return " ".join("".join(kept).split())
 
-    The Live API's transcription stream is usually incremental deltas, but it
-    can also resend a cumulative or exact-duplicate chunk (most visibly right
-    at turn end) — naively appending every chunk then doubles the on-screen
-    text AND the transcript_lines fed to the scorer/debrief (BUG 2). This
-    treats three cases: an exact/suffix repeat of what's already accumulated
-    (emit nothing), a cumulative resend that starts with what's accumulated
-    (replace, emit only the new suffix), and a genuine incremental delta
-    (append, emit the delta as-is)."""
+
+# A restatement is a re-send of the WHOLE turn, so it is comparable in length
+# to what's accumulated; a genuine incremental delta is a few words against a
+# long accumulation. 0.6 is the length floor, 0.82 the similarity floor —
+# both measured against real captured chunks (see docs/DIRECTORS_NOTES.md):
+# the observed restatement scored 0.9976 similarity at 1.005x length, while
+# real deltas score far below both.
+_RESTATEMENT_MIN_LEN_RATIO = 0.6
+_RESTATEMENT_MIN_SIMILARITY = 0.82
+
+
+def _is_restatement(accumulated: str, chunk: str) -> bool:
+    """True when `chunk` is a corrected re-send of the whole accumulated turn
+    rather than the next piece of it."""
+    na, nc = _normalize_for_compare(accumulated), _normalize_for_compare(chunk)
+    if not na or not nc:
+        return False
+    if nc == na or na in nc:
+        # Same utterance modulo punctuation/spacing, or a cumulative resend
+        # that only differs from `accumulated` in formatting.
+        return True
+    if len(nc) < _RESTATEMENT_MIN_LEN_RATIO * len(na):
+        # Far too short to be a re-send of the whole turn — this is a delta.
+        return False
+    return (
+        difflib.SequenceMatcher(None, na, nc).ratio() >= _RESTATEMENT_MIN_SIMILARITY
+    )
+
+
+def _reconcile_transcript_chunk(accumulated: str, chunk: str) -> tuple[str, str, bool]:
+    """Merges a new input_transcription/output_transcription chunk into the
+    turn's running text.
+
+    Returns (new_accumulated, text_to_send, replace). When `replace` is True
+    the client must REPLACE the current turn's text with `text_to_send`
+    instead of appending it (see the transcript message contract at the top
+    of this file).
+
+    BUG 2, third attempt — this time driven by captured chunks rather than by
+    reasoning about the API. A real Live session (`THE_STAND_TRANSCRIPT_DIAG=1`,
+    reverse mode, sales_discovery_call) showed the actual shape that was
+    doubling the screen: at turn end the API re-sends the ENTIRE turn as one
+    chunk, lightly revised now that it has heard the whole utterance. The
+    captured pair was 612 chars accumulated vs. a 615-char final chunk whose
+    only difference was one inserted word ("...this quarter, I wanted..." →
+    "...this quarter, so I wanted..."). That chunk is not contained in the
+    accumulation and does not start with it, so both of the previous rounds'
+    checks necessarily missed it and it landed in the `accumulated + chunk`
+    branch — printing the whole turn twice. Exactly what the screenshots show
+    ("comes around 500k" / "comes in around 500k").
+
+    Hence the four cases below: an exact/substring repeat (emit nothing), a
+    clean cumulative resend (emit only the new suffix), a *revised*
+    restatement of the same turn (replace the turn, emit the full corrected
+    text), and a genuine incremental delta (append)."""
     if not chunk:
-        return accumulated, ""
+        return accumulated, "", False
     if not accumulated:
-        return chunk, chunk
+        return chunk, chunk, False
     if chunk in accumulated:
-        # Covers exact repeats, suffix repeats, AND the narrower cases an
-        # adversarial review caught the old `accumulated.endswith(chunk)`
-        # check missing: a strict-prefix-shrink resend (chunk is a shorter
-        # already-seen prefix of accumulated) and a resend of a middle
-        # substring — both used to fall through to "append" and corrupt the
-        # transcript instead of being recognized as already-present text.
-        return accumulated, ""
+        # Exact repeats, suffix repeats, strict-prefix-shrink resends, and
+        # middle-substring resends — all already on screen, emit nothing.
+        return accumulated, "", False
     if chunk.startswith(accumulated):
-        return chunk, chunk[len(accumulated):]
-    return accumulated + chunk, chunk
+        return chunk, chunk[len(accumulated):], False
+    if _is_restatement(accumulated, chunk):
+        # The API corrected earlier words. Appending would double the turn;
+        # a delta can't express an edit in the middle. Send the whole turn
+        # and let the client swap the node.
+        return chunk, chunk, True
+    return accumulated + chunk, chunk, False
 
 
 async def _resolve_case(case_id: str) -> dict:
@@ -336,6 +422,18 @@ async def upload_case(
         mode, file.filename, len(file_bytes), bool((focus or "").strip()), bool(target_case_id),
     )
 
+    # BUG 1: prove there is something to build a case FROM before the model
+    # ever sees the document. An empty/whitespace-only/image-only upload used
+    # to sail past the size ceiling straight into generation, and the model
+    # invented an entire case — committee, methodology attack lines and all —
+    # out of zero bytes, then presented it under a citation rubric. Refuse
+    # loudly at the upload card instead; never fall back to a template.
+    try:
+        assert_document_has_substance(file_bytes, mime_type, file.filename or "")
+    except UnreadableDocumentError as exc:
+        logger.info("upload_case rejected: unreadable/too-thin document (%s)", exc)
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
     try:
         content = await generate_case_content(mode, file_bytes, mime_type, focus=focus)
     except UploadTooLargeError as exc:
@@ -356,6 +454,45 @@ async def upload_case(
     await uploaded_case_store.save_case(case_id_out, case)
 
     return {"case": _case_summary(case_id_out, case)}
+
+
+@app.delete("/api/cases/{case_id}")
+async def delete_uploaded_case(case_id: str, x_owner_token: str = Header(None)):
+    """FEATURE 7: let an uploader remove their own uploaded case.
+
+    Until now the only way to get rid of an upload was `server/admin_prune_case`
+    from a shell — which is exactly how the 2026-08-30 privacy P1 happened
+    (someone else's document sat visible in the grid because nobody could
+    remove it from the product). This is the same delete, done properly:
+
+    - Ownership is enforced SERVER-side, not by hiding a button. A curated
+      case can never be deleted; an uploaded case can only be deleted by a
+      caller presenting its `owner_token`.
+    - A wrong/absent token gets the same 404 as an unknown id, so the endpoint
+      cannot be used to probe which uploaded case ids exist.
+    - Reuses `UploadedCaseStore.delete_case()` — the one deletion path, shared
+      with the admin CLI — and additionally drops the in-process cache entry,
+      which the CLI cannot reach (a Cloud Run instance would otherwise keep
+      serving the deleted case for the rest of its life).
+    """
+    try:
+        case = await _resolve_case(case_id)
+    except UnknownCaseError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    not_found = HTTPException(
+        status_code=404, detail=f"no case file or uploaded case for case_id '{case_id}'"
+    )
+    if not case.get("uploaded"):
+        # Curated cases are part of the product, not user data.
+        raise HTTPException(status_code=403, detail="this case can't be deleted")
+    if not x_owner_token or case.get("owner_token") != x_owner_token:
+        raise not_found
+
+    _uploaded_cases_cache.pop(case_id, None)
+    await uploaded_case_store.delete_case(case_id)
+    logger.info("delete_uploaded_case: %s removed by its owner", case_id)
+    return {"deleted": case_id}
 
 
 @app.get("/api/cases/{case_id}/briefing")
@@ -624,21 +761,45 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str) -> None:
                 await websocket.send_text(json.dumps({"type": "interrupted"}))
 
             if event.input_transcription and event.input_transcription.text:
-                pending_examiner_text, delta = _reconcile_transcript_chunk(
+                _prev = pending_examiner_text
+                pending_examiner_text, delta, replace = _reconcile_transcript_chunk(
                     pending_examiner_text, event.input_transcription.text
+                )
+                _diag_chunk(
+                    session_id, "examiner", _prev, event.input_transcription.text, delta, replace
                 )
                 if delta:
                     await websocket.send_text(
-                        json.dumps({"type": "transcript", "role": "examiner", "text": delta, "partial": True})
+                        json.dumps(
+                            {
+                                "type": "transcript",
+                                "role": "examiner",
+                                "text": delta,
+                                "partial": True,
+                                "replace": replace,
+                            }
+                        )
                     )
 
             if event.output_transcription and event.output_transcription.text:
-                current_witness_text, delta = _reconcile_transcript_chunk(
+                _prev = current_witness_text
+                current_witness_text, delta, replace = _reconcile_transcript_chunk(
                     current_witness_text, event.output_transcription.text
+                )
+                _diag_chunk(
+                    session_id, "witness", _prev, event.output_transcription.text, delta, replace
                 )
                 if delta:
                     await websocket.send_text(
-                        json.dumps({"type": "transcript", "role": "witness", "text": delta, "partial": True})
+                        json.dumps(
+                            {
+                                "type": "transcript",
+                                "role": "witness",
+                                "text": delta,
+                                "partial": True,
+                                "replace": replace,
+                            }
+                        )
                     )
 
             if event.content and event.content.parts:

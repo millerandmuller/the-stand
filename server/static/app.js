@@ -3,6 +3,64 @@
 // per the brief, this is exactly the amount of frontend a one-room product
 // needs, not a "kein Framework-Ausbau" violation.
 
+// ---------- BUG 3 (round 3) diagnostics: ?diag=1 ----------
+// Two prior rounds "fixed" End-session silence by reading this file and
+// patching what looked wrong. Both times it read correctly and both times it
+// still talked. This block measures instead: it counts AudioContexts, taps
+// the real output graph with a pass-through AnalyserNode (never connected
+// onward, so production audio routing is byte-for-byte unchanged), samples
+// RMS every 20ms, and records every playPcm16/stop call with the state that
+// was actually live at that moment. Off unless ?diag=1 is in the URL.
+const DIAG = new URLSearchParams(location.search).get("diag") === "1";
+const diag = {
+  ctxCount: 0,
+  ctxIds: [],
+  plays: [],
+  stops: [],
+  clicks: [],
+  rms: [], // [tMs, rms]
+  wsAudio: [], // arrival time of every inbound audio frame
+};
+function diagNow() {
+  return Math.round(performance.now());
+}
+function diagLog(bucket, entry) {
+  if (!DIAG) return;
+  entry.t = diagNow();
+  diag[bucket].push(entry);
+}
+if (DIAG) {
+  // Count every AudioContext ever constructed (hypothesis (a): a second
+  // context playing while stop() hits nodes of the first).
+  const NativeCtx = window.AudioContext || window.webkitAudioContext;
+  const Wrapped = function (...args) {
+    const ctx = new NativeCtx(...args);
+    diag.ctxCount += 1;
+    ctx.__standId = diag.ctxCount;
+    diag.ctxIds.push({ id: diag.ctxCount, t: diagNow(), state: ctx.state });
+    return ctx;
+  };
+  Wrapped.prototype = NativeCtx.prototype;
+  window.AudioContext = Wrapped;
+  window.webkitAudioContext = Wrapped;
+  window.__standDiag = diag;
+}
+let diagAnalyser = null;
+let diagRmsTimer = null;
+function diagAttachMeter(ctx) {
+  if (!DIAG || !ctx) return;
+  diagAnalyser = ctx.createAnalyser();
+  diagAnalyser.fftSize = 2048;
+  const buf = new Float32Array(diagAnalyser.fftSize);
+  clearInterval(diagRmsTimer);
+  diagRmsTimer = setInterval(() => {
+    diagAnalyser.getFloatTimeDomainData(buf);
+    let sum = 0;
+    for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
+    diag.rms.push([diagNow(), Math.sqrt(sum / buf.length)]);
+  }, 20);
+}
+
 // ---------- DOM refs ----------
 const caseSelectHeader = document.getElementById("caseSelectHeader");
 const caseSelectView = document.getElementById("caseSelectView");
@@ -53,6 +111,13 @@ const debriefNextRep = document.getElementById("debriefNextRep");
 const debriefCost = document.getElementById("debriefCost");
 const againBtn = document.getElementById("againBtn");
 const downloadTranscriptBtn = document.getElementById("downloadTranscriptBtn");
+// FEATURE 8: second entry point for the same download, in the technique column
+const downloadTranscriptSidebarBtn = document.getElementById("downloadTranscriptSidebarBtn");
+const debriefScoreLines = document.getElementById("debriefScoreLines");
+const debriefSidebarLabel = document.getElementById("debriefSidebarLabel");
+const debriefSidebarScore = document.getElementById("debriefSidebarScore");
+const debriefSidebarScale = document.getElementById("debriefSidebarScale");
+const debriefSidebarFooterText = document.getElementById("debriefSidebarFooterText");
 
 // ---------- state ----------
 let ws = null;
@@ -84,6 +149,14 @@ let activeAudioSources = [];
 let sessionEnded = false; // set the instant End/Back fires; blocks any audio still in flight from playing
 
 function stopAllAudioImmediately() {
+  diagLog("stops", {
+    sources: activeAudioSources.length,
+    ctxId: audioCtx ? audioCtx.__standId : null,
+    ctxState: audioCtx ? audioCtx.state : null,
+    ctxTime: audioCtx ? Number(audioCtx.currentTime.toFixed(3)) : null,
+    playHead: Number(playHead.toFixed(3)),
+    wasEnded: sessionEnded,
+  });
   sessionEnded = true;
   for (const src of activeAudioSources) {
     try {
@@ -176,6 +249,7 @@ function renderCaseGrid() {
     card.type = "button";
     card.className = "case-card" + (c.case_id === selectedCaseId ? " selected" : "");
     card.setAttribute("aria-pressed", c.case_id === selectedCaseId ? "true" : "false");
+    card.dataset.caseId = c.case_id; // FEATURE 6: lets the start block find its card
 
     const kicker = c.case_number ? `Case No. ${c.case_number} · ${c.case_type}` : c.case_type;
     let langBadge = "";
@@ -209,6 +283,14 @@ function renderCaseGrid() {
                 : ""
             }
             ${
+              // FEATURE 7: an upload you can't remove is the privacy bug that
+              // already bit us once. Server enforces ownership; this is just
+              // the door.
+              c.uploaded
+                ? `<button type="button" class="briefing-link delete-case-link" data-case-id="${c.case_id}">Delete</button>`
+                : ""
+            }
+            ${
               c.reverse_available
                 ? `<button type="button" class="reverse-toggle${c.case_id === selectedCaseId && reverseSelected ? " on" : ""}" data-case-id="${c.case_id}" title="${c.reverse_short_role || "Reverse mode"}">Take the other chair</button>`
                 : c.uploaded
@@ -236,6 +318,13 @@ function renderCaseGrid() {
         beginChangeFocus(c.case_id);
       };
     }
+    const deleteBtn = card.querySelector(".delete-case-link");
+    if (deleteBtn) {
+      deleteBtn.onclick = (e) => {
+        e.stopPropagation();
+        deleteUploadedCase(c);
+      };
+    }
     const reverseBtn = card.querySelector(".reverse-toggle:not(.disabled)");
     if (reverseBtn) {
       reverseBtn.onclick = (e) => {
@@ -252,7 +341,63 @@ function renderCaseGrid() {
     gridForCase(c).appendChild(card);
   }
   if (uploadModes.length) renderUploadCard();
+  placeStartBlock();
 }
+
+// ---------- FEATURE 6: "Take the stand." follows the selected card ----------
+// The button used to sit permanently below the whole three-section grid, so
+// picking a card gave no hint about what to do next. Now it is moved into the
+// grid, onto the row directly beneath the selected card and aligned to that
+// card's column; with no selection it returns to its original place under the
+// grid, exactly as before.
+const startBlock = document.querySelector(".start-block");
+const startBlockHome = startBlock ? startBlock.parentNode : null;
+const startBlockAnchor = startBlock ? startBlock.nextSibling : null;
+
+function gridColumnCount(grid) {
+  const tpl = getComputedStyle(grid).gridTemplateColumns;
+  return Math.max(1, tpl.split(" ").filter(Boolean).length);
+}
+
+function placeStartBlock() {
+  if (!startBlock) return;
+  document.querySelectorAll(".start-row").forEach((r) => r.remove());
+
+  const card = selectedCaseId
+    ? document.querySelector(`.case-card[data-case-id="${CSS.escape(selectedCaseId)}"]`)
+    : null;
+  if (!card) {
+    // No selection (or the selected case is gone) — back to the page bottom.
+    if (startBlockHome && startBlock.parentNode !== startBlockHome) {
+      startBlockHome.insertBefore(startBlock, startBlockAnchor);
+    }
+    return;
+  }
+
+  const grid = card.parentNode;
+  const cards = [...grid.children];
+  const cols = gridColumnCount(grid);
+  const index = cards.indexOf(card);
+  const col = (index % cols) + 1;
+  // Insert after the LAST card of this card's row, so the row above stays
+  // complete and the button lands directly underneath.
+  const rowEnd = Math.min(cards.length, (Math.floor(index / cols) + 1) * cols);
+
+  const row = document.createElement("div");
+  row.className = "start-row";
+  row.style.gridTemplateColumns = `repeat(${cols}, minmax(0, 1fr))`;
+  const cell = document.createElement("div");
+  cell.style.gridColumn = String(col);
+  cell.appendChild(startBlock);
+  row.appendChild(cell);
+  grid.insertBefore(row, cards[rowEnd] || null);
+}
+
+// Column count is breakpoint-dependent, so a resize can change which column
+// the selected card sits in.
+window.addEventListener("resize", () => {
+  if (!caseSelectView.hidden) placeStartBlock();
+});
 
 // ---------- F17: Case-Briefing-Panel ----------
 async function openBriefing(caseId, role) {
@@ -407,7 +552,12 @@ async function doUpload(card) {
     const res = await fetch("/api/cases/upload", { method: "POST", body: form });
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
-      throw new Error(body.detail || `upload failed (${res.status})`);
+      const err = new Error(body.detail || `upload failed (${res.status})`);
+      // BUG 1: 422 is the "this document has no readable text" refusal. Its
+      // detail is already a complete, plain sentence meant for the user —
+      // show it verbatim instead of wrapping it in another apology.
+      err.verbatim = res.status === 422;
+      throw err;
     }
     const data = await res.json();
     if (refocusCaseId) {
@@ -423,11 +573,38 @@ async function doUpload(card) {
     const p = gridOwn.querySelector(".upload-card #uploadProgress");
     if (p) {
       p.classList.add("error");
-      p.textContent = "Couldn't read your case — " + (err && err.message ? err.message : err);
+      const msg = err && err.message ? err.message : String(err);
+      p.textContent = err && err.verbatim ? msg : "Couldn't read your case — " + msg;
     }
     return;
   }
   uploading = false;
+}
+
+// ---------- FEATURE 7: delete an uploaded case ----------
+async function deleteUploadedCase(c) {
+  if (uploading) return;
+  if (!window.confirm(`Delete "${c.display_name}"? This removes the case for good.`)) return;
+  try {
+    const res = await fetch(`/api/cases/${encodeURIComponent(c.case_id)}`, {
+      method: "DELETE",
+      headers: { "X-Owner-Token": getOwnerToken() },
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.detail || `delete failed (${res.status})`);
+    }
+  } catch (err) {
+    showStatus("Couldn't delete that case — " + (err && err.message ? err.message : err));
+    return;
+  }
+  cases = cases.filter((x) => x.case_id !== c.case_id);
+  if (selectedCaseId === c.case_id) {
+    selectedCaseId = null;
+    reverseSelected = false;
+  }
+  showStatus("");
+  renderCaseGrid();
 }
 
 // ---------- F19 2c: change focus on an existing uploaded case ----------
@@ -520,7 +697,10 @@ function stopMic() {
 function playPcm16(base64data, sampleRate = 24000) {
   // BUG 3: audio frames already in flight when "End session" fires must
   // never start playing — sessionEnded flips the instant that happens.
-  if (sessionEnded) return;
+  if (sessionEnded) {
+    diagLog("plays", { blocked: true, sessionEnded: true });
+    return;
+  }
   const int16 = int16FromBase64(base64data);
   const float32 = new Float32Array(int16.length);
   for (let i = 0; i < int16.length; i++) float32[i] = int16[i] / 0x8000;
@@ -529,11 +709,22 @@ function playPcm16(base64data, sampleRate = 24000) {
   const src = audioCtx.createBufferSource();
   src.buffer = buffer;
   src.connect(audioCtx.destination);
+  if (diagAnalyser) src.connect(diagAnalyser); // pure tap, no onward output
   const now = audioCtx.currentTime;
   const startAt = Math.max(now, playHead);
   src.start(startAt);
   playHead = startAt + buffer.duration;
   activeAudioSources.push(src);
+  diagLog("plays", {
+    blocked: false,
+    ctxId: audioCtx.__standId,
+    ctxState: audioCtx.state,
+    now: Number(now.toFixed(3)),
+    startAt: Number(startAt.toFixed(3)),
+    dur: Number(buffer.duration.toFixed(3)),
+    queueAhead: Number((startAt - now).toFixed(3)),
+    sources: activeAudioSources.length,
+  });
   src.onended = () => {
     activeAudioSources = activeAudioSources.filter((s) => s !== src);
   };
@@ -556,6 +747,10 @@ function renderTranscript() {
   if (examinerAccum) html += `<div class="examiner-line sans">YOU — "${examinerAccum}"</div>`;
   if (witnessAccum) html += `<div class="witness-line">"${witnessAccum}"</div>`;
   transcriptView.innerHTML = html + `<div class="interrupt-status sans" id="interruptStatus"></div>`;
+  // BUG 4: the transcript now scrolls inside its own box instead of growing
+  // the room — so the newest words have to be scrolled to, or a long turn
+  // would appear frozen on its first line.
+  transcriptView.scrollTop = transcriptView.scrollHeight;
 }
 
 function showInterrupted() {
@@ -672,6 +867,18 @@ function renderDebrief(d) {
   } else {
     debriefCost.textContent = "";
   }
+
+  // FEATURE 8: carry the technique/rubric column into the debrief so the
+  // annotations stay readable and the transcript download sits where the
+  // user looked for it. Same lines, same labels, same file — no re-render
+  // of the score events, just the nodes the room already built.
+  if (debriefScoreLines) {
+    debriefScoreLines.innerHTML = scoreLines.innerHTML;
+    debriefSidebarLabel.textContent = sidebarLabel ? sidebarLabel.textContent : "Rubric";
+    debriefSidebarScore.textContent = scoreTotal.textContent;
+    debriefSidebarScale.textContent = sidebarScoreScale ? sidebarScoreScale.textContent : "/ 10 · AMTA scale";
+    debriefSidebarFooterText.textContent = sidebarFooter ? sidebarFooter.textContent : "";
+  }
 }
 
 function showStatus(text) {
@@ -743,6 +950,9 @@ function downloadTranscript() {
 if (downloadTranscriptBtn) {
   downloadTranscriptBtn.onclick = downloadTranscript;
 }
+if (downloadTranscriptSidebarBtn) {
+  downloadTranscriptSidebarBtn.onclick = downloadTranscript;
+}
 
 // ---------- websocket ----------
 // Connects the room WebSocket and resolves once it's open (or rejects with a
@@ -778,9 +988,13 @@ function connectWS() {
     ws.onmessage = (evt) => {
       const msg = JSON.parse(evt.data);
       if (msg.type === "audio") {
+        diagLog("wsAudio", { bytes: msg.data.length, sessionEnded });
         playPcm16(msg.data);
         waveform.classList.add("live");
       } else if (msg.type === "transcript") {
+        // BUG 2: msg.replace means the server reconciled a corrected re-send
+        // of the whole turn — swap the text instead of appending it, which is
+        // what printed every corrected turn twice.
         if (msg.role === "examiner") {
           if (witnessAccum) {
             // a fresh examiner turn starting — clear the previous witness
@@ -788,9 +1002,9 @@ function connectWS() {
             witnessAccum = "";
           }
           clearWhisper(); // FEATURE 2: a whisper is only relevant to the exchange it was suggested for
-          examinerAccum += msg.text;
+          examinerAccum = msg.replace ? msg.text : examinerAccum + msg.text;
         } else if (msg.role === "witness") {
-          witnessAccum += msg.text;
+          witnessAccum = msg.replace ? msg.text : witnessAccum + msg.text;
         }
         renderTranscript();
       } else if (msg.type === "interrupted") {
@@ -856,6 +1070,7 @@ async function beginSession() {
   closeBriefing();
   audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   playHead = audioCtx.currentTime;
+  diagAttachMeter(audioCtx);
   showStatus("");
   try {
     await connectWS();
@@ -933,6 +1148,7 @@ async function beginSession() {
 startBtn.onclick = beginSession;
 
 function endSessionNow() {
+  diagLog("clicks", { handler: "endSessionNow" });
   stopAllAudioImmediately(); // BUG 3: silence in the same tick as the click, before the network round-trip
   if (ws && ws.readyState === WebSocket.OPEN) {
     try {

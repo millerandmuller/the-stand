@@ -495,11 +495,80 @@ means an upload effectively lives in the tab that made it: clearing site
 data or switching browsers loses access to it (re-upload takes under a
 minute), a stated trade-off rather than a bug.
 
-## Watch a replayed session (Round 3, F22)
+**Grounding gate (2026-08-31).** Before this existed, the only upload check
+was the *upper* size bound — so an empty file, a whitespace-only file or an
+image-only PDF went straight to the model, which filled the vacuum and
+invented a complete case (committee, methodology attack lines and all) out
+of nothing, then presented it under this project's citation rubric. A case
+generated from zero bytes cannot cite anything, which makes it the one
+failure cite-or-GAP cannot survive. `assert_document_has_substance()`
+(`witness_agent/case_generator.py`) now extracts the document's text —
+native decode for text formats, `pypdf` text-layer extraction for PDFs —
+and refuses **before the model is called**: HTTP 422, a plain-language
+message on the upload card, no case, no grid entry, no template fallback.
+The bar is `MIN_DOCUMENT_CHARS = 400` **and** `MIN_DOCUMENT_WORDS = 50`,
+about one substantial paragraph: below that there is nothing left for a
+citation to point at. It only ever refuses on positive evidence — a format
+this module can't read (e.g. `.docx`) is passed through to the model
+exactly as before, so the gate can never start rejecting real documents it
+merely failed to parse. Regression coverage:
+`tests/test_upload_substance_gate.py`.
 
-A secondary "Watch a replayed session" button on the case-select screen
-plays back a real recorded cross-examination for jurors who never speak
-into their microphone. Built once via `eval/build_replay_bundle.py` from a
+**Deleting an upload (2026-08-31).** `DELETE /api/cases/{case_id}`, with
+ownership enforced server-side (not by hiding a button): a wrong or absent
+`X-Owner-Token` gets the same 404 as an unknown id, so the endpoint can't
+be used to probe which upload ids exist, and a curated case is never
+deletable (403). It reuses `UploadedCaseStore.delete_case()` — the same
+single deletion path as the `server/admin_prune_case` CLI — and also drops
+the in-process cache entry, which the CLI can't reach.
+
+## Live transcript reconciliation
+
+The Live API's transcription stream is not a clean sequence of deltas. At
+turn end it re-sends the **entire turn as one chunk, lightly revised** now
+that it has heard the whole utterance — a captured example differed from
+the accumulated 612-character turn by exactly one inserted word ("so") at
+0.9976 similarity. Appending that chunk printed every corrected turn twice,
+on screen and in the scorer/debrief input.
+
+`_reconcile_transcript_chunk()` (`server/app.py`) therefore classifies each
+chunk into four cases: an exact/substring repeat (emit nothing), a clean
+cumulative resend (emit only the new suffix), a **revised restatement** of
+the same turn (replace it), or a genuine incremental delta (append). A
+restatement is detected by normalized similarity — punctuation- and
+case-insensitive, with a length-ratio floor so a short delta can never be
+mistaken for a re-send.
+
+Because a delta cannot express an edit in the *middle* of already-sent
+text, the browser protocol carries the correction explicitly: the
+`transcript` message has a `replace` flag, and on `replace: true` the
+server sends the full corrected turn and the client swaps the node instead
+of appending. Both transcription directions (`input_transcription` and
+`output_transcription`) use the same function, and `transcript_lines` —
+what the `RubricScorer`, the `DebriefAgent` and the transcript download all
+read — is built from the same reconciled text, so display and scoring can
+never disagree. Regression coverage:
+`tests/test_transcript_reconcile.py`, pinned to the captured chunks.
+
+Set `THE_STAND_TRANSCRIPT_DIAG=1` to log every raw transcription chunk with
+its surrounding accumulated state (off by default; logs the session's own
+transcript chunks only, never an uploaded document's content).
+
+## Recorded-session replay (F22) — withdrawn as a product entry point
+
+> **Status (2026-08-31):** the "Watch a replayed session" button has been
+> removed from the case-select screen. The replay only ever shows the AI's
+> half of a session — a monologue, not the sparring the product is about —
+> so as a shop window it misrepresented what The Stand does. The recorded
+> bundle, `eval/eval_sets/live_audio_witness/` and
+> `eval/build_replay_bundle.py` all remain in the repo unchanged: they are
+> the engineering proof that a Live/bidi voice session can be re-played by
+> `adk eval` with real audio, and they are cited as evidence, not offered
+> as a feature. `server/static/replay.js` no-ops when the button is absent.
+> The rest of this section describes how that evidence was built.
+
+The replay played back a real recorded cross-examination for jurors who
+never speak into their microphone. Built once via `eval/build_replay_bundle.py` from a
 real `adk eval` run of `eval/eval_sets/live_audio_witness/` (see
 `eval/run_eval.py`'s docstring, item 6): the witness's actual Gemini Live
 output audio is extracted and concatenated

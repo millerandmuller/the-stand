@@ -66,6 +66,9 @@
   }
   #whisperToggle:hover { border-color: var(--accent); color: var(--accent-hover); }
   #whisperToggle.on { border-color: var(--accent); background: rgba(176,141,87,0.14); color: var(--accent-hover); }
+  /* FEATURE 5 */
+  .whisper-control { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+  .whisper-hint { font-size: 10.5px; letter-spacing: 0.01em; color: var(--text-5); text-align: center; }
 
   /* ---------- case select view ---------- */
   #caseSelectView {
@@ -184,6 +187,13 @@
   .upload-progress.error { color: var(--red); }
 
   .start-block { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+  /* FEATURE 6: once a case is picked, the start block moves into the grid on
+     the row directly under that card, aligned to its column — the next step
+     appears where the eye already is instead of at the bottom of the page.
+     .start-row spans the full grid width so the card row above it stays
+     intact; the inner cell is what carries the column alignment. */
+  .start-row { grid-column: 1 / -1; display: grid; gap: 20px; padding-top: 4px; }
+  .start-row .start-block { align-items: center; }
   .cta {
     display: flex; align-items: center; gap: 12px; padding: 15px 42px; background: #17181a;
     border: 1px solid var(--accent); border-radius: 4px; cursor: pointer; font: inherit; color: inherit;
@@ -217,16 +227,34 @@
 
   /* ---------- room view ---------- */
   #roomView { flex: 1; display: flex; min-height: 0; }
+  /* BUG 3 + BUG 4 (measured, round 3): this used to be `justify-content:
+     center` with the default `overflow: visible` and no `min-height: 0`, so
+     any turn taller than the room overflowed the box in BOTH directions —
+     the transcript painted straight over the header (elementFromPoint on
+     "Whisper" returned .witness-block, so the toggle was buried, not broken)
+     and "End session." was pushed 105px below the fold at 1440x900, where a
+     click lands on nothing and the stop handler never fires at all. The
+     silence logic itself was never the bug: once endSessionNow() actually
+     runs, an instrumented session measured 58 scheduled sources killed and
+     output RMS 0.43 -> 0 inside one 20ms sample.
+     The fix is structural: the room clips and scrolls inside itself, the
+     transcript scrolls inside its own bounded region, and the auto-margin
+     pair centers the content only while there is free space (auto margins
+     resolve to 0 once space goes negative, so nothing is ever pushed above
+     scrollTop 0 — the same trap that made the case grid unreachable). */
   .room-main {
-    flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-start;
     gap: 36px; padding: 40px; position: relative;
+    min-height: 0; overflow-y: auto; overflow-x: hidden;
   }
+  .room-main > *:first-child { margin-top: auto; }
+  .room-main > *:last-child { margin-bottom: auto; }
   .room-main::before {
     content: ""; position: absolute; top: 0; left: 0; right: 0; height: 260px;
     background: radial-gradient(ellipse 60% 100% at 50% 0%, rgba(176, 141, 87, 0.06), rgba(11, 12, 14, 0));
     pointer-events: none;
   }
-  .witness-block { display: flex; flex-direction: column; align-items: center; gap: 18px; }
+  .witness-block { display: flex; flex-direction: column; align-items: center; gap: 18px; min-height: 0; max-width: 100%; }
   .avatar {
     width: 120px; height: 120px; border-radius: 50%; border: 1px solid #35342f; background: var(--surface-2);
     display: flex; align-items: center; justify-content: center; box-shadow: 0 0 60px rgba(176, 141, 87, 0.07);
@@ -236,7 +264,15 @@
   .waveform.live { animation: waveform-pulse 1.6s ease-in-out infinite; }
   @keyframes waveform-pulse { 0%, 100% { opacity: 0.85; } 50% { opacity: 1; } }
 
-  .transcript { max-width: 660px; text-align: center; display: flex; flex-direction: column; gap: 10px; min-height: 4.5em; }
+  /* BUG 4: bounded and self-scrolling. A turn of any length now scrolls
+     inside this box; it can no longer grow the room and push the controls
+     out of reach. 38vh leaves room for the avatar, the dial and the End
+     button at every viewport height we tested. */
+  .transcript {
+    max-width: 660px; text-align: center; display: flex; flex-direction: column; gap: 10px;
+    min-height: 4.5em; max-height: 38vh; overflow-y: auto; overflow-x: hidden;
+    flex: 0 1 auto; width: 100%; scrollbar-width: thin;
+  }
   .transcript .examiner-line { font-size: 12.5px; color: #9db4c0; }
   .transcript .witness-line { font-size: 25px; line-height: 1.4; color: var(--text-1); }
   .transcript .interrupt-status {
@@ -309,7 +345,19 @@
   .score-line .cite { font-size: 11px; color: var(--text-4); }
 
   /* ---------- debrief view ---------- */
-  #debriefView { flex: 1; display: flex; align-items: center; justify-content: center; padding: 48px; overflow-y: auto; }
+  /* FEATURE 8: the debrief keeps the technique/rubric column that was beside
+     the session, and the transcript download now lives at the bottom of it —
+     where the user looked for it, next to the [T-xx]/[S-xx] annotations they
+     had just been reading. Same file, same downloadTranscript() call as the
+     button in the cost row; a second entry point, not a second code path. */
+  #debriefView { flex: 1; display: flex; min-height: 0; }
+  .debrief-scroll {
+    flex: 1; display: flex; align-items: center; justify-content: center;
+    padding: 48px; overflow-y: auto; min-width: 0;
+  }
+  #debriefSidebar .footer { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
+  #debriefSidebar .footer .download-link { align-self: stretch; text-align: center; }
+  @media (max-width: 900px) { #debriefSidebar { display: none; } }
   .debrief-inner { width: 100%; max-width: 860px; display: flex; flex-direction: column; gap: 34px; }
   .debrief-head { display: flex; align-items: center; gap: 40px; flex-wrap: wrap; }
   .score-tile {
@@ -392,7 +440,14 @@
     </button>
     <div class="sans start-hint">Voice session · you can interrupt the witness at any time</div>
     <div class="sans" id="statusMsg" role="alert"></div>
-    <button class="watch-replay-btn sans" id="watchReplayBtn" type="button">Watch a replayed session</button>
+    <!-- DECISION 9 (round 3, user's call): "Watch a replayed session" removed
+         as a product entry point. The replay only ever showed the AI's half of
+         a session — a monologue, not a sparring match — so as a shop window on
+         the case-selection screen it misrepresented the product. The recorded
+         material and the live-audio eval set stay in the repo untouched: they
+         remain the engineering proof for the Live-audio eval, they are just no
+         longer offered to users as a feature. replay.js no-ops without this
+         button (it returns early when #watchReplayBtn is absent). -->
   </div>
 </main>
 
@@ -403,10 +458,17 @@
     <div class="name">The Stand</div>
     <div class="sans context" id="roomContext"></div>
   </div>
-  <button class="sans" id="whisperToggle" type="button" aria-pressed="false" title="Whisper mode — a quiet suggestion of what to try next">
-    <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M2 6.5c1.5-3 7.5-3 9 0"></path><path d="M4 6.5c0-1.6 1.3-2.5 2.5-2.5S9 4.9 9 6.5"></path><circle cx="6.5" cy="9.3" r="1"></circle></svg>
-    Whisper
-  </button>
+  <!-- FEATURE 5: the button said "Whisper" and only its author knew what that
+       meant. The line underneath says what it does, in the same quiet register
+       as the "counsel's whisper" line it produces — not a tooltip, because the
+       user never found the tooltip. -->
+  <div class="whisper-control">
+    <button class="sans" id="whisperToggle" type="button" aria-pressed="false" aria-describedby="whisperHint" title="Whisper mode — a quiet suggestion of what to try next">
+      <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M2 6.5c1.5-3 7.5-3 9 0"></path><path d="M4 6.5c0-1.6 1.3-2.5 2.5-2.5S9 4.9 9 6.5"></path><circle cx="6.5" cy="9.3" r="1"></circle></svg>
+      Whisper
+    </button>
+    <div class="sans whisper-hint" id="whisperHint">Stuck? It suggests your next question.</div>
+  </div>
   <button class="sans" id="briefingToggle" type="button">
     <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="1.5" y="1.5" width="10" height="10" rx="1.5"></rect><path d="M4 4.5h5M4 6.7h5M4 8.9h3"></path></svg>
     Case file
@@ -516,6 +578,7 @@
   <div class="disclaimer">Trains technique. Not legal advice.</div>
 </header>
 <div id="debriefView" hidden>
+  <div class="debrief-scroll">
   <div class="debrief-inner">
     <div class="debrief-head">
       <div class="score-tile sans">
@@ -543,6 +606,24 @@
       <button type="button" class="watch-replay-btn" id="downloadTranscriptBtn">Download transcript</button>
     </div>
   </div>
+  </div>
+
+  <!-- FEATURE 8: the technique/rubric column the session was read in, carried
+       into the debrief, with the transcript download at its foot. -->
+  <aside class="sidebar" id="debriefSidebar">
+    <div class="sidebar-header sans">
+      <div class="label" id="debriefSidebarLabel">Rubric</div>
+      <div class="score-row">
+        <div class="score-total" id="debriefSidebarScore">0</div>
+        <div class="score-scale" id="debriefSidebarScale">/ 10 · AMTA scale</div>
+      </div>
+    </div>
+    <div class="score-lines sans" id="debriefScoreLines"></div>
+    <div class="footer sans">
+      <button type="button" class="watch-replay-btn download-link" id="downloadTranscriptSidebarBtn">Download transcript</button>
+      <span id="debriefSidebarFooterText">Every line cites its source. Nothing is scored without one.</span>
+    </div>
+  </aside>
 </div>
 
 <!-- ============ F17 CASE-BRIEFING PANEL ============ -->
