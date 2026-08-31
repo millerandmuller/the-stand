@@ -156,6 +156,13 @@ def _normalize_for_compare(text: str) -> str:
 # real deltas score far below both.
 _RESTATEMENT_MIN_LEN_RATIO = 0.6
 _RESTATEMENT_MIN_SIMILARITY = 0.82
+# Below this many normalized characters, only an exact duplicate may count as
+# a restatement. A real turn-end restatement is a whole turn (the captured one
+# was 612 characters); on a 3-character accumulation the ratio and similarity
+# guards are both trivially satisfied, so "the" + " then" was being treated as
+# a correction and silently dropped the word "the". Replacing is destructive
+# and appending is not, so the tie is broken toward appending.
+_RESTATEMENT_MIN_TURN_CHARS = 60
 
 
 def _is_restatement(accumulated: str, chunk: str) -> bool:
@@ -164,9 +171,18 @@ def _is_restatement(accumulated: str, chunk: str) -> bool:
     na, nc = _normalize_for_compare(accumulated), _normalize_for_compare(chunk)
     if not na or not nc:
         return False
-    if nc == na or na in nc:
-        # Same utterance modulo punctuation/spacing, or a cumulative resend
-        # that only differs from `accumulated` in formatting.
+    if nc == na:
+        # The same utterance modulo punctuation/spacing. Safe to treat as a
+        # restatement at any length: replacing text with itself loses nothing.
+        return True
+    if len(na) < _RESTATEMENT_MIN_TURN_CHARS:
+        return False
+    if nc.startswith(na):
+        # A cumulative resend that only differs from `accumulated` in
+        # formatting. Note startswith, not `in`: a restatement re-sends the
+        # turn from its beginning, whereas `na in nc` also matched a mid-string
+        # coincidence ("no" inside " I said no"), which is a delta, not a
+        # correction.
         return True
     if len(nc) < _RESTATEMENT_MIN_LEN_RATIO * len(na):
         # Far too short to be a re-send of the whole turn — this is a delta.
@@ -205,7 +221,18 @@ def _reconcile_transcript_chunk(accumulated: str, chunk: str) -> tuple[str, str,
     if not chunk:
         return accumulated, "", False
     if not accumulated:
-        return chunk, chunk, False
+        # First chunk of a turn. This MUST be a replace, not an append: the
+        # server clears `pending_examiner_text`/`current_witness_text` at
+        # turn_complete, but the browser has no turn_complete signal, so an
+        # append here glued every new question onto the previous ones and the
+        # "YOU —" line grew into a run-on for the whole session
+        # ("...where were you on the night of the 14th?Can anyone corroborate
+        # that?"). That is the second half of BUG 2, and the one the user's
+        # Rheinwerk screenshot actually shows ("...wo Sie mir dasHaben sie" —
+        # note the missing space, a concatenation seam, not a repetition).
+        # Sending replace here makes "server cleared the turn" and "client
+        # cleared the turn" the same event instead of two that can drift.
+        return chunk, chunk, True
     if chunk in accumulated:
         # Exact repeats, suffix repeats, strict-prefix-shrink resends, and
         # middle-substring resends — all already on screen, emit nothing.
@@ -442,6 +469,21 @@ async def upload_case(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except GenerationFailedError as exc:
         raise HTTPException(status_code=502, detail=f"couldn't read your case: {exc}") from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        # Anything the generation call itself throws — an upstream 4xx/5xx
+        # from the model API, a transport error, a schema surprise. Without
+        # this, such an error propagated raw and the Bring-Your-Own-Case card
+        # showed a bare 500 with no explanation, on the demo's second headline
+        # feature. The document's content is never logged (leitplanken), only
+        # the error type.
+        logger.warning("upload_case generation failed: %s", type(exc).__name__)
+        raise HTTPException(
+            status_code=502,
+            detail="Couldn't build a case from this document — the generator "
+                   "couldn't process it. Try a different file.",
+        ) from exc
 
     template = load_case(UPLOAD_MODE_TEMPLATE_CASE_ID[mode])
     case_id_out = target_case_id or f"uploaded_{uuid.uuid4().hex[:10]}"

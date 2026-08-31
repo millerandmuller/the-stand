@@ -119,7 +119,87 @@ def test_exact_and_substring_repeats_still_emit_nothing():
 
 def test_empty_inputs():
     assert _reconcile_transcript_chunk("anything", "") == ("anything", "", False)
-    assert _reconcile_transcript_chunk("", "first") == ("first", "first", False)
+
+
+# --------------------------------------------------------------------------
+# The OTHER half of BUG 2, found by the adversarial review: cross-turn
+# accumulation on the examiner line.
+#
+# The server clears pending_examiner_text/current_witness_text at
+# turn_complete, but the browser gets no turn_complete signal — so the first
+# chunk of every new turn arrived with replace=False and the client appended
+# it to the previous turn's text. By question three the "YOU —" line was a
+# run-on of every question ever asked, with no separator. That is what the
+# user's Rheinwerk screenshot actually shows: "...wo Sie mir dasHaben sie",
+# where the missing space between "das" and "Haben" is the concatenation
+# seam. Distinct from the restatement bug above, and it survived the first
+# fix of this round because that fix only looked inside a single turn.
+# --------------------------------------------------------------------------
+
+
+def test_first_chunk_of_a_turn_replaces_so_the_client_can_drop_the_last_turn():
+    acc, text, replace = _reconcile_transcript_chunk("", "Can anyone corroborate that?")
+    assert replace is True, "a turn's first chunk must replace, or the client appends it to the previous turn"
+    assert acc == text == "Can anyone corroborate that?"
+
+
+def _simulate_session(turns):
+    """Runs whole turns through the real server function and the real client
+    accumulator rule, and returns what would be ON SCREEN at the end."""
+    server_acc = ""
+    screen = ""
+    for turn in turns:
+        server_acc = ""  # the server clears at turn_complete
+        for chunk in turn:
+            server_acc, text, replace = _reconcile_transcript_chunk(server_acc, chunk)
+            if text:
+                screen = text if replace else screen + text
+    return screen
+
+
+def test_three_questions_do_not_pile_up_on_screen():
+    screen = _simulate_session([
+        ["Where were you", " on the night of the 14th?"],
+        ["Can anyone", " corroborate that?"],
+        ["What is your", " roommate's name?"],
+    ])
+    assert screen == "What is your roommate's name?"
+    assert "Where were you" not in screen
+    assert "corroborate" not in screen
+
+
+def test_witness_line_does_not_pile_up_either():
+    screen = _simulate_session([
+        ["I was", " at home all evening."],
+        ["No,", " nobody else was there."],
+    ])
+    assert screen == "No, nobody else was there."
+
+
+# --------------------------------------------------------------------------
+# Restatement detection must never erase text on a SHORT accumulation.
+# Replacing is destructive and appending is not, so the tie goes to appending.
+# --------------------------------------------------------------------------
+
+
+def test_short_accumulation_never_triggers_a_destructive_replace():
+    for accumulated, chunk in (
+        ("the", " then"),           # would have produced " then", losing "the"
+        ("no", " I said no"),       # mid-string coincidence, not a restatement
+        ("It was", " It was not"),
+        ("he", " the"),
+    ):
+        acc, text, replace = _reconcile_transcript_chunk(accumulated, chunk)
+        assert replace is False, (accumulated, chunk, acc)
+        assert accumulated in acc, f"{accumulated!r} was erased -> {acc!r}"
+
+
+def test_short_exact_duplicate_is_still_deduped():
+    """The one short case that may still "replace": the same word again,
+    differing only in punctuation/case. Nothing can be lost by that."""
+    acc, text, replace = _reconcile_transcript_chunk("Yes", " yes")
+    assert replace is True
+    assert acc == " yes"
 
 
 def test_restatement_detection_does_not_fire_on_a_genuine_short_delta():

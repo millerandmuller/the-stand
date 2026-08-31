@@ -131,15 +131,51 @@ def test_thresholds_are_the_documented_ones():
     assert MIN_DOCUMENT_WORDS == 50
 
 
-def test_unreadable_format_is_not_rejected_on_a_guess():
-    """We only ever refuse on positive evidence. A format this module can't
-    extract (e.g. .docx) must still go to the model, exactly as before —
-    otherwise the fix would start rejecting real documents."""
-    assert_document_has_substance(
-        b"PK\x03\x04" + b"\x00" * 5000,
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        "thesis.docx",
-    )
+def test_unsupported_formats_are_refused_with_an_accurate_reason():
+    """Found by the adversarial review: every format outside text/* and PDF
+    used to be waved through as "unknown", which both re-opened the
+    fabricate-from-nothing hole and — because the generation call had no
+    catch-all — surfaced as a bare 500 on the Bring-Your-Own-Case card when
+    the model rejected the payload. The upload control offers PDF and text
+    only and the generator can't ingest these either, so refuse here with a
+    reason the user can act on."""
+    for payload, mime, name in (
+        (b"PK\x03\x04" + b"\x00" * 5000, "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "thesis.docx"),
+        (b"\x89PNG\r\n\x1a\n" + b"\x00" * 2000, "image/png", "scan.png"),
+        (b"PK\x03\x04" + b"\x00" * 800, "application/vnd.openxmlformats-officedocument.presentationml.presentation", "deck.pptx"),
+    ):
+        with pytest.raises(UnreadableDocumentError) as exc:
+            assert_document_has_substance(payload, mime, name)
+        assert "pdf or a text file" in str(exc.value).lower(), str(exc.value)
+
+
+def test_locked_or_damaged_pdf_is_refused_with_its_own_reason():
+    """An encrypted PDF can't be read here and can't be read by the model —
+    forwarding it just produced an upstream error."""
+    pypdf = pytest.importorskip("pypdf")
+    writer = pypdf.PdfWriter()
+    writer.add_blank_page(width=200, height=200)
+    writer.encrypt("a-password")
+    buf = io.BytesIO()
+    writer.write(buf)
+
+    with pytest.raises(UnreadableDocumentError) as exc:
+        assert_document_has_substance(buf.getvalue(), "application/pdf", "locked.pdf")
+    assert "password-protected or damaged" in str(exc.value)
+
+
+def test_a_supported_format_we_merely_failed_to_parse_is_still_let_through():
+    """The "refuse only on positive evidence" rule still holds where it
+    matters: if the PDF extractor itself is unavailable, we must not start
+    rejecting real PDFs."""
+    from witness_agent import case_generator as cg
+
+    real_pdf_text = cg._pdf_text
+    try:
+        cg._pdf_text = lambda _b: cg._UNKNOWN
+        assert_document_has_substance(b"%PDF-1.4 whatever", "application/pdf", "real.pdf")
+    finally:
+        cg._pdf_text = real_pdf_text
 
 
 # --------------------------------------------------------------------------

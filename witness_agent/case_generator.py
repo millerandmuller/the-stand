@@ -186,6 +186,14 @@ _TOO_THIN_MESSAGE = (
     "No case can be built from this document — there is too little readable "
     "text in it to ground a single cited question."
 )
+_UNSUPPORTED_FORMAT_MESSAGE = (
+    "No case can be built from this file — it isn't a format we can read. "
+    "Upload a PDF or a text file."
+)
+_LOCKED_PDF_MESSAGE = (
+    "No case can be built from this PDF — it's password-protected or damaged, "
+    "so its text can't be read."
+)
 
 
 def _pdf_text(file_bytes: bytes) -> str:
@@ -211,18 +219,23 @@ def _pdf_text(file_bytes: bytes) -> str:
         pages = reader.pages[:30]
         return "\n".join((p.extract_text() or "") for p in pages)
     except Exception:
-        # Malformed/encrypted PDF: we genuinely don't know what's in it.
-        return _UNKNOWN
+        # Password-protected or damaged. We can't read it — and neither can
+        # the model, so passing it through only produced an upstream error.
+        return _LOCKED_PDF
 
 
-# Sentinel distinct from "" (proven empty) — means "could not determine".
+# Sentinels, all distinct from "" (proven empty).
+# _UNKNOWN means "could not determine, let it through" — the one case where
+# refusing could reject a real document we merely failed to parse ourselves.
 _UNKNOWN = "\x00__extraction_unavailable__"
+# These two mean "we know we cannot read this, and neither can the model".
+_LOCKED_PDF = "\x00__locked_or_damaged_pdf__"
+_UNSUPPORTED_FORMAT = "\x00__unsupported_format__"
 
 
 def extract_document_text(file_bytes: bytes, mime_type: str, filename: str = "") -> str:
     """Returns the document's readable text, "" if it provably has none, or
-    the _UNKNOWN sentinel when this function can't tell (in which case the
-    caller must not reject — we only ever refuse on positive evidence)."""
+    one of the sentinels above."""
     if not file_bytes:
         return ""
     mime = (mime_type or "").split(";")[0].strip().lower()
@@ -241,9 +254,13 @@ def extract_document_text(file_bytes: bytes, mime_type: str, filename: str = "")
                 continue
         return ""
 
-    # Some other binary format (image, docx, …). We can't read it here, and
-    # guessing would mean rejecting real documents — leave the verdict open.
-    return _UNKNOWN
+    # Some other format (.docx, .pptx, an image, …). The upload control offers
+    # PDF and text only, and the generation call can't ingest these either —
+    # forwarding one produced a raw upstream error and a bare 500 on the
+    # Bring-Your-Own-Case card. Refuse it here with an accurate reason
+    # instead. This is still "refuse on positive evidence": the evidence is
+    # the format itself, not a failed parse of a supported one.
+    return _UNSUPPORTED_FORMAT
 
 
 def _readable_stats(text: str) -> tuple[int, int]:
@@ -267,6 +284,10 @@ def assert_document_has_substance(
     text = extract_document_text(file_bytes, mime_type, filename)
     if text == _UNKNOWN:
         return
+    if text == _LOCKED_PDF:
+        raise UnreadableDocumentError(_LOCKED_PDF_MESSAGE)
+    if text == _UNSUPPORTED_FORMAT:
+        raise UnreadableDocumentError(_UNSUPPORTED_FORMAT_MESSAGE)
     if not text.strip():
         raise UnreadableDocumentError(_UNREADABLE_MESSAGE)
 
