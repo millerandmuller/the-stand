@@ -133,6 +133,7 @@ let cases = [];
 let activeRoleWord = "witness"; // BUG 4: the room's word for "whoever's in the other chair", set per case
 let sessionStartMs = 0;
 let clockTimer = null;
+let frozenElapsedLabel = null; // BUG 1 (fix round): the clock's value at the instant the session ended, so the debrief header can't show a later time than what the room's clock actually froze at
 let examinerAccum = "";
 let witnessAccum = "";
 let scoreEventLog = []; // {dxx, triggered, violation} — used to color debrief moments honestly
@@ -886,7 +887,12 @@ function renderDebrief(d) {
   lastDebrief = d; // FEATURE 1: kept for "Download transcript"
 
   const selected = cases.find((c) => c.case_id === selectedCaseId);
-  debriefContext.textContent = `Session closed · ${selected ? selected.display_name : ""} · ${elapsedLabel().replace(":", " min ")} s`;
+  // BUG 1 (fix round): use the label frozen at "End session." (or Back),
+  // not a freshly recomputed elapsedLabel() — the debrief round trip can
+  // take several real seconds, and recomputing here would show MORE time
+  // than what the room's clock actually froze at on screen.
+  const durationLabel = frozenElapsedLabel !== null ? frozenElapsedLabel : elapsedLabel();
+  debriefContext.textContent = `Session closed · ${selected ? selected.display_name : ""} · ${durationLabel.replace(":", " min ")} s`;
 
   debriefScore.innerHTML = `${d.amta_score}<span class="scale"> / 10</span>`;
   debriefHeadline.textContent = d.headline;
@@ -1055,12 +1061,21 @@ function connectWS() {
             // line so the pair always reflects the current exchange.
             witnessAccum = "";
           }
-          clearWhisper(); // FEATURE 2: a whisper is only relevant to the exchange it was suggested for
+          // BUG 2 (fix round): a whisper used to be cleared the instant the
+          // user started their next question — exactly the pause where
+          // they're meant to read it. It now survives the user's question
+          // and clears only once the following witness answer begins (see
+          // the witness branch below), so it stands through the gap it was
+          // written for instead of vanishing before it can be used.
           examinerAccum = msg.replace ? msg.text : examinerAccum + msg.text;
         } else if (msg.role === "witness") {
-          // BUG 3: first content of a fresh witness turn — the exchange is
-          // now underway, so a whisper for it may arrive shortly.
-          if (!witnessAccum) armWhisperPending();
+          if (!witnessAccum) {
+            // BUG 2: the previous whisper's window has closed — the next
+            // answer it was meant to inform is already underway.
+            clearWhisper();
+            // BUG 3: ...and a new one may be on its way for this exchange.
+            armWhisperPending();
+          }
           witnessAccum = msg.replace ? msg.text : witnessAccum + msg.text;
         }
         renderTranscript();
@@ -1192,6 +1207,7 @@ async function beginSession() {
 
   // BUG 3 / Back-fix: fresh session, nothing ended yet, no audio queued.
   sessionEnded = false;
+  frozenElapsedLabel = null; // BUG 1 (fix round): re-arm for this session
   activeAudioSources = [];
   // FEATURE 2: whisper always starts OFF (leitplanke a) — re-arm the toggle
   // with the server each session instead of carrying a stale preference.
@@ -1214,6 +1230,16 @@ startBtn.onclick = beginSession;
 function endSessionNow() {
   diagLog("clicks", { handler: "endSessionNow" });
   stopAllAudioImmediately(); // BUG 3: silence in the same tick as the click, before the network round-trip
+  // BUG 1 (fix round): freeze the clock in this same tick too — previously
+  // the interval only stopped once the debrief message came back (a round
+  // trip that can take several seconds), so the header kept visibly
+  // ticking after "End session." Idempotent: leaveRoomToCaseSelect() calls
+  // this on the Back-button path too, and a second click/press must not
+  // re-capture a later value.
+  if (frozenElapsedLabel === null) frozenElapsedLabel = elapsedLabel();
+  clearInterval(clockTimer);
+  clockTimer = null;
+  if (liveClock) liveClock.textContent = "LIVE · " + frozenElapsedLabel; // last paint matches the frozen value exactly, not whatever the 1s-granularity tick last happened to show
   if (ws && ws.readyState === WebSocket.OPEN) {
     try {
       ws.send(JSON.stringify({ type: "end_session" }));
