@@ -190,9 +190,23 @@ class RubricScorer:
     every event's score_delta is forced to 0 regardless of what the model
     returns, since reverse mode never scores the user."""
 
-    def __init__(self, case: dict, api_key: Optional[str] = None, reverse: bool = False):
+    def __init__(
+        self,
+        case: dict,
+        api_key: Optional[str] = None,
+        reverse: bool = False,
+        language_code: Optional[str] = None,
+    ):
         self.case = case
         self.reverse = reverse
+        # BUG 2 (round 4): the case's BCP-47 code (same value server/app.py
+        # feeds into SpeechConfig — see case_language_code() in
+        # witness_agent/agent.py), used only to steer the whisper field's
+        # language. The rubric/technique citation prompt above stays English
+        # on purpose (see _system_instruction) — it quotes an English rubric
+        # ([S-01]/[T-01], AMTA scale), so only the whisper suggestion the
+        # user actually reads aloud needs to match the session's language.
+        self.language_code = language_code
         self._client = genai.Client(
             api_key=api_key or os.environ.get("GOOGLE_API_KEY")
         )
@@ -234,6 +248,18 @@ class RubricScorer:
             )
         if self.whisper_enabled:
             instruction += _WHISPER_ADDENDUM_REVERSE if self.reverse else _WHISPER_ADDENDUM_FORWARD
+            # BUG 2 (round 4): without this, the addendum's own English
+            # wording leaked into the "whisper" field even in a German/
+            # Spanish session — the model just answered in the language it
+            # was asked in. Only the whisper text is redirected; the rubric
+            # citations above are untouched.
+            if self.language_code and not self.language_code.lower().startswith("en"):
+                instruction += (
+                    f'\nWrite the "whisper" field itself in the language with BCP-47 '
+                    f'code "{self.language_code}" — the same language this session\'s '
+                    f"dialogue is conducted in. Everything else in your response "
+                    f"(criterion names, notes) stays as instructed above.\n"
+                )
         return instruction
 
     def _contents(self, examiner_question: str, witness_answer: str) -> str:

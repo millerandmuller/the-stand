@@ -600,7 +600,13 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str) -> None:
         if case.get("uploaded") and (not owner_token or case.get("owner_token") != owner_token):
             raise UnknownCaseError(f"no case file or uploaded case for case_id '{case_id}'")
         case, agent, stage_direction_for_level = build_agent_from_case(case, reverse=reverse)
-        scorer = RubricScorer(case, reverse=reverse)
+        # BUG 2 (round 4): same BCP-47 code SpeechConfig uses below, passed
+        # through to the whisper prompt so "counsel's whisper" speaks the
+        # case's language instead of defaulting to the English the addendum
+        # is written in. One source of truth for the case's language, read
+        # once, not a second language field invented in the scorer.
+        language_code = case_language_code(case)
+        scorer = RubricScorer(case, reverse=reverse, language_code=language_code)
     except (UnknownCaseError, MalformedCaseError, ReverseNotAvailableError) as exc:
         await websocket.send_text(json.dumps({"type": "error", "message": str(exc)}))
         return
@@ -619,7 +625,6 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str) -> None:
     # into SpeechConfig makes the Live model's audio actually come back in
     # that language instead of relying on the prompt alone. Omitted for the
     # English-default cases (speech_config=None keeps default behavior).
-    language_code = case_language_code(case)
     speech_config = (
         types.SpeechConfig(language_code=language_code) if language_code else None
     )
@@ -663,8 +668,19 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str) -> None:
     # context and reflected back in the debrief so both stay honest about
     # what the operator actually asked to be pressed on this session.
     active_focus = case.get("focus")
+    # BUG 3 (round 4): score_and_emit is dispatched fire-and-forget once per
+    # completed witness turn (see the `asyncio.create_task` call site below)
+    # and can take a couple seconds — long enough that the NEXT exchange has
+    # already started by the time a slow one's whisper comes back. Bumped
+    # once per dispatch, so a task can tell whether it's still the latest
+    # one before it speaks. Pure bookkeeping around the scorer call, not the
+    # run_live/audio loop that dispatches it.
+    exchange_seq = 0
 
     async def score_and_emit(examiner_q: str, witness_a: str) -> None:
+        nonlocal exchange_seq
+        exchange_seq += 1
+        my_seq = exchange_seq
         if not examiner_q.strip() or not witness_a.strip():
             return
         try:
@@ -679,7 +695,10 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str) -> None:
         # return below — most exchanges trigger zero rubric events but can
         # still carry a whisper suggestion, and the whisper must not be
         # dropped just because there was nothing to score this turn.
-        if result.whisper:
+        # BUG 3: a newer exchange started scoring while this one was in
+        # flight — this whisper is for a question that's no longer on
+        # screen, so it's dropped rather than surfacing under the new one.
+        if result.whisper and my_seq == exchange_seq:
             await websocket.send_text(json.dumps({"type": "whisper", "text": result.whisper}))
         if not result.events:
             return
