@@ -311,10 +311,11 @@
      only the border's color changes — so the box height truly never moves;
      an idle slot is a transparent line, not a removed one. */
   .whisper-line {
-    max-width: 520px; width: 100%; min-height: 2.4em; text-align: center;
+    max-width: 520px; width: 100%; height: 3em; text-align: center;
     font-size: 13px; font-style: italic; color: var(--text-4); margin-top: 4px;
     padding-top: 4px; border-top: 1px dashed transparent;
     display: flex; align-items: center; justify-content: center; flex: none;
+    overflow: hidden;
   }
   .whisper-line:not(:empty) { border-top-color: var(--line-2); }
   .whisper-line:not(:empty)::before { content: "counsel's whisper — "; font-style: normal; color: var(--text-5); }
