@@ -876,11 +876,39 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str) -> None:
 
         # Live connection ended (queue closed) — nothing more to stream.
 
+    # Session shutdown. This used to be a plain
+    # `asyncio.gather(upstream_task(), downstream_task())`, which never
+    # returned: `upstream_task` exits on `end_session` and closes the
+    # LiveRequestQueue, but closing the queue does NOT terminate the
+    # `run_live()` async generator that `downstream_task` is iterating, so the
+    # gather waited forever and the `finally` below — where the debrief is
+    # built and sent — was simply unreachable. Measured, not guessed: a log
+    # line at the top of that `finally` never appeared across seven sessions.
+    #
+    # So we no longer wait for the downstream side to end on its own. We wait
+    # for upstream (which returns the moment the user ends the session), close
+    # the queue, give the stream a short grace period to drain, and then cancel
+    # it. Nothing here touches audio handling, RunConfig or SpeechConfig — only
+    # the order in which the two tasks are shut down.
+    down = asyncio.create_task(downstream_task())
     try:
-        await asyncio.gather(upstream_task(), downstream_task(), return_exceptions=True)
+        await upstream_task()
+    except Exception:
+        logger.exception("[%s] upstream task failed", session_id)
     finally:
-        logger.info("[%s] session loop returned, building debrief", session_id)
         live_request_queue.close()
+        try:
+            # Grace period: let anything already in flight finish arriving.
+            await asyncio.wait_for(asyncio.shield(down), timeout=2.0)
+        except asyncio.TimeoutError:
+            down.cancel()
+        except Exception:
+            logger.exception("[%s] downstream task failed", session_id)
+        try:
+            await down
+        except (asyncio.CancelledError, Exception):
+            pass
+        logger.warning("[%s] session loop returned, building debrief", session_id)
         try:
             transcript = "\n".join(transcript_lines) or "(no exchanges recorded)"
             debrief = await debrief_agent.build(transcript, scored_events, focus=active_focus)
