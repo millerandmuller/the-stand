@@ -288,11 +288,18 @@
      of the box growing to fit them. The top mask fades the line that's
      about to scroll out instead of hard-clipping it mid-character. No
      scrollbar is shown — nothing here is meant to be scrolled by hand. */
+  /* BUG 1 follow-up (adversarial re-review): `scroll-behavior: smooth` here
+     raced with app.js's `scrollTop = scrollHeight` on a bulk content swap
+     (a whole-turn `msg.replace` correction, or a long first chunk) — the
+     scroll could fail to reach bottom in time, clipping the newest line
+     exactly like the bug this box exists to fix. Instant scrollTop
+     assignment is synchronous and always lands correctly; a soft-feeling
+     read comes from the CSS transitions on text color/opacity instead, not
+     from animating the scroll position itself. */
   .transcript {
     max-width: 660px; text-align: center; display: flex; flex-direction: column; gap: 10px;
     height: clamp(84px, 21vh, 168px); overflow-y: auto; overflow-x: hidden;
     flex: none; width: 100%; scrollbar-width: none;
-    scroll-behavior: smooth;
     mask-image: linear-gradient(to bottom, transparent, black 22px, black 100%);
     -webkit-mask-image: linear-gradient(to bottom, transparent, black 22px, black 100%);
   }

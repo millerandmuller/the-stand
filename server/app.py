@@ -679,10 +679,16 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str) -> None:
 
     async def score_and_emit(examiner_q: str, witness_a: str) -> None:
         nonlocal exchange_seq
-        exchange_seq += 1
-        my_seq = exchange_seq
+        # BUG 3 follow-up (adversarial re-review): the sequence number is
+        # only claimed once we know this call will actually score something.
+        # Bumping it unconditionally (even on the empty-examiner_q early
+        # return below — reachable if ASR drops the examiner's audio) let a
+        # no-op call invalidate a real, still-in-flight whisper for the
+        # exchange that's still current, dropping a legitimate suggestion.
         if not examiner_q.strip() or not witness_a.strip():
             return
+        exchange_seq += 1
+        my_seq = exchange_seq
         try:
             result = await scorer.score_exchange(examiner_q, witness_a)
         except Exception as exc:  # scorer failure must never break the live session

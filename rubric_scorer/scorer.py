@@ -206,7 +206,10 @@ class RubricScorer:
         # on purpose (see _system_instruction) — it quotes an English rubric
         # ([S-01]/[T-01], AMTA scale), so only the whisper suggestion the
         # user actually reads aloud needs to match the session's language.
-        self.language_code = language_code
+        # .strip() so a whitespace-only code (not filtered by
+        # case_language_code()'s `code or None`, which only catches falsy
+        # values) can't produce a malformed 'BCP-47 code " "' directive.
+        self.language_code = (language_code or "").strip() or None
         self._client = genai.Client(
             api_key=api_key or os.environ.get("GOOGLE_API_KEY")
         )
