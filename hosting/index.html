@@ -22,23 +22,34 @@
     --text-4: #8a8880;
   }
   body {
-    margin: 0; min-height: 100vh; background: var(--bg); color: var(--text-1);
+    /* Everything must sit above the fold on a laptop — no scrolling to reach
+       the button. Spacing and type scale with viewport height instead of fixed
+       px, and the video is capped by height (below), so the whole page shrinks
+       to fit rather than pushing the CTA off-screen. */
+    margin: 0; min-height: 100dvh; background: var(--bg); color: var(--text-1);
     font-family: 'Cormorant Garamond', Georgia, serif;
-    display: flex; flex-direction: column; align-items: center;
-    padding: 8vh 6vw 6vh;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    padding: clamp(12px, 2vh, 32px) 4vw;
   }
   .sans { font-family: 'IBM Plex Sans', system-ui, sans-serif; }
   .disclaimer { font-family: 'IBM Plex Sans', system-ui, sans-serif; font-size: 12px; color: var(--text-4); letter-spacing: 0.02em; }
-  main { max-width: 640px; width: 100%; display: flex; flex-direction: column; align-items: center; text-align: center; gap: 28px; }
-  h1.name { font-size: 20px; font-weight: 500; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-2); margin: 0; }
-  h2.tagline { font-size: clamp(28px, 5vw, 40px); font-weight: 500; line-height: 1.25; margin: 0; color: var(--text-1); }
-  p.explain { font-size: 17px; line-height: 1.6; color: var(--text-3); margin: 0; max-width: 52ch; }
+  /* Wider column on purpose: the same copy wraps into fewer lines, which buys
+     the vertical room the CTA needs. The paragraph still keeps a measure cap so
+     it never becomes an unreadable full-width line. */
+  main { max-width: 860px; width: 100%; display: flex; flex-direction: column; align-items: center; text-align: center; gap: clamp(10px, 1.8vh, 22px); }
+  h1.name { font-size: clamp(14px, 1.8vh, 18px); font-weight: 500; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-2); margin: 0; }
+  h2.tagline { font-size: clamp(24px, 3.9vh, 37px); font-weight: 500; line-height: 1.2; margin: 0; color: var(--text-1); text-wrap: balance; }
+  p.explain { font-size: clamp(14px, 1.9vh, 17px); line-height: 1.5; color: var(--text-3); margin: 0; max-width: 68ch; text-wrap: pretty; }
   .video-slot {
-    width: 100%; aspect-ratio: 16 / 9; border: 1px solid var(--line-1); border-radius: 4px;
+    /* Capped by HEIGHT, not just width: on a short laptop window the video
+       gives up space so the button stays visible. max-width keeps the 16:9
+       box from growing wider than its height allows. */
+    width: 100%; aspect-ratio: 16 / 9; max-height: 30vh; max-width: min(620px, calc(30vh * 16 / 9));
+    margin: 0 auto; border: 1px solid var(--line-1); border-radius: 4px;
     background: var(--surface-1); display: flex; align-items: center; justify-content: center;
     overflow: hidden;
   }
-  .video-slot iframe { width: 100%; height: 100%; border: 0; display: block; }
+  .video-slot video { width: 100%; height: 100%; display: block; object-fit: cover; background: #000; }
   .video-slot .placeholder { font-family: 'IBM Plex Sans', system-ui, sans-serif; font-size: 13px; color: var(--text-4); letter-spacing: 0.04em; }
   .start-block { display: flex; flex-direction: column; align-items: center; gap: 10px; margin-top: 4px; }
   button.cta {
@@ -62,15 +73,25 @@
   <h1 class="name">The Stand</h1>
   <h2 class="tagline">The day that matters is coming. Walk in rehearsed.</h2>
   <p class="explain">
-    The cross-examination, the defense, the make-or-break call — practice
-    the conversation by voice, against someone who pushes back. The Stand is
-    a live-voice sparring room: an interruptible AI counterpart answers you
-    in character, in real time, and a rubric sidebar scores every line
-    against a published ballot as you go. No script, no canned replies.
+    The cross-examination, the dissertation defense, the call that decides
+    the quarter — you get one take, live and out loud. The Stand is where you
+    take it first: you speak, an interruptible counterpart answers in
+    character, and a rubric sidebar scores every line against a published
+    ballot as you go. Three rooms, three languages — or upload your own
+    document and be examined on that. No script, no canned replies.
   </p>
 
   <div class="video-slot" id="videoSlot">
-    <div class="placeholder sans" id="videoPlaceholder">Demo video — coming soon</div>
+    <!-- Self-hosted rather than an embed: no third-party player chrome, no
+         suggested-video rail after the last frame, no consent question. With
+         preload="metadata" only the poster and a few KB of headers load until
+         someone actually presses play. -->
+    <video id="explainer" controls playsinline preload="metadata" poster="poster.jpg"
+           aria-label="The Stand — explainer video">
+      <source src="explainer.mp4" type="video/mp4">
+      Your browser cannot play this video.
+      <a href="explainer.mp4">Download it instead.</a>
+    </video>
   </div>
 
   <div class="start-block">
@@ -88,15 +109,6 @@
   // The app URL — real navigation only, the app never runs in an iframe here
   // (microphone permissions in iframes are unreliable cross-browser, notably Safari).
   const APP_URL = "https://the-stand-596357648145.europe-west1.run.app";
-
-  // Optional: set to a real YouTube embed URL once the demo video exists.
-  const VIDEO_EMBED_URL = "";
-
-  (function setupVideoSlot() {
-    if (!VIDEO_EMBED_URL) return;
-    const slot = document.getElementById("videoSlot");
-    slot.innerHTML = '<iframe src="' + VIDEO_EMBED_URL + '" title="The Stand — demo" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>';
-  })();
 
   (function warmUpAndArmLaunch() {
     const btn = document.getElementById("launchBtn");
