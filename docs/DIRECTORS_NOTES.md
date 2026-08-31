@@ -364,3 +364,74 @@ existing guard.
 bundle and the playback screenshot all stay in the repo. They remain the
 engineering proof for the Live-audio eval and are cited as such in the writeup.
 F22 is withdrawn as a *product entry point*, not as *evidence*.
+
+## Revision — what the adversarial review caught that the build missed
+
+Three findings, two of them P1, all fixed and re-verified. Worth recording,
+because the fresh-context pass earned its keep twice in one round:
+
+### P1 — BUG 2 had a SECOND cause, and the first fix didn't touch it
+
+The restatement fix above is correct but only looks *inside* one turn. The
+server clears `pending_examiner_text`/`current_witness_text` at `turn_complete`;
+the browser has no `turn_complete` signal, so the first chunk of every new turn
+arrived with `replace: false` and was **appended to the previous turn**. By the
+third question the "YOU —" line was a run-on of every question ever asked:
+
+    "Where were you on the night of the 14th?Can anyone corroborate that?"
+
+That — not the restatement — is what the user's Rheinwerk screenshot actually
+shows: *"...wo Sie mir dasHaben sie Okay, wann wann wären sie da?"*. The missing
+space between "das" and "Haben" is a concatenation seam, not a repetition. Two
+different defects were producing one symptom, which is why fixing either alone
+kept looking wrong.
+
+**Fixed:** a turn's first chunk now returns `replace=True`, so "the server
+cleared the turn" and "the browser cleared the turn" are the same event instead
+of two that drift apart. **Verified live** in a real two-turn session with a
+fake microphone: question 1 (`"Tell me how your pricing works."`) is cleanly
+replaced by question 2 (`"And what exactly is included in that number?"`) —
+question 1 is gone from the screen, not glued to it.
+
+### P1 — the upload gate had a hole big enough for a .docx
+
+`assert_document_has_substance()` waved through **every** format outside
+text/* and PDF as "unknown, let it through" — the deliberate "only refuse on
+positive evidence" rule, applied too broadly. A `.docx`, an image or a
+password-protected PDF therefore reached the generator, which rejected the
+payload, and since `upload_case` had no catch-all the raw upstream error became
+a **bare 500 on the Bring-Your-Own-Case card** — a visible crash on the demo's
+second headline feature.
+
+**Fixed:** the extractor now distinguishes "could not determine" (still let
+through — that rule was right where it applies) from "we know we cannot read
+this, and neither can the model". A `.docx`/image gets *"it isn't a format we
+can read. Upload a PDF or a text file."*, a locked PDF gets its own message, and
+`upload_case` finally has a catch-all so no upstream failure reaches the browser
+unexplained. All four verified live: 422 with a distinct, accurate message,
+never a 500.
+
+### P2 — restatement detection could erase a word on a short turn
+
+`_is_restatement()` had no lower bound on the accumulated turn's length, so on a
+3-character accumulation the ratio and similarity guards were both trivially
+satisfied: `"the"` + `" then"` was classified as a correction and replaced,
+losing "the". The `na in nc` branch also matched a mid-string coincidence
+(`"no"` inside `" I said no"`), which is a delta, not a correction.
+
+**Fixed:** a 60-normalized-character floor (a real restatement is a whole turn —
+the captured one was 612 characters), `startswith` instead of `in`, and only an
+exact duplicate may still "replace" below the floor, because replacing text with
+itself cannot lose anything. **The principle now encoded in the code: replacing
+is destructive and appending is not, so the tie goes to appending.**
+
+### Also probed and found sound (no action needed)
+
+Delete-endpoint auth and id enumeration (wrong token, absent token, token
+prefix, path traversal, double-delete, cross-owner — all correctly 404 and
+indistinguishable from an unknown id; curated cases 403); owner-token privacy
+scoping unchanged by this round; `placeStartBlock()`'s DOM surgery under resize
+spam, stale selection and an empty grid (start block count stayed exactly 1,
+click handler stayed bound); the room layout re-probed with a 10,000-character
+transcript down to 900x500 (all controls reachable); model IDs and Cloud Run
+timeout/memory against brief Section H.T (exact match).
