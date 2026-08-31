@@ -436,50 +436,96 @@ click handler stayed bound); the room layout re-probed with a 10,000-character
 transcript down to 900x500 (all controls reachable); model IDs and Cloud Run
 timeout/memory against brief Section H.T (exact match).
 
-## OPEN, demo-critical, NOT fixed this round — the debrief never arrives
+## FIXED (approved mid-round) — the debrief never arrived after "End session."
 
-Found by the demo rehearsal, independently reproduced twice by the coordinator
-(a raw websocket client, no browser involved). **After "End session." no
-`{"type":"debrief"}` frame is ever sent — not within 120 seconds, with no error
-and no close frame. The room simply goes silent.** This is the last step of the
-Kern-Loop and the entire basis of the Proof beat's on-screen `[D-08]`/AMTA
-comparison, and of dossier test case T-06.
+Found by the demo rehearsal, independently reproduced by the coordinator with a
+raw websocket client (no browser involved). **After "End session." no
+`{"type":"debrief"}` frame was ever sent — not within 120 seconds, with no
+error and no close frame. The room simply went silent.** That is the last step
+of the Kern-Loop and the entire basis of the Proof beat's on-screen
+`[D-08]`/AMTA comparison, and of dossier test case T-06.
 
-**Root cause, established at the log level, not inferred:**
+**Cause:**
 
-    upstream_task()  -- breaks on end_session, finally: live_request_queue.close()
-    downstream_task() -- `async for event in runner.run_live(...)` NEVER RETURNS
-    await asyncio.gather(upstream_task(), downstream_task())   <-- hangs forever
+    await asyncio.gather(upstream_task(), downstream_task())   <-- never returns
     finally:  <-- never reached; this is where the debrief is built and sent
 
-A log line placed at the top of that `finally` block (`"session loop returned,
-building debrief"`) **never appears**. So the debrief code is not failing — it
-is never reached. Closing the `LiveRequestQueue` does not terminate the
-`run_live()` async generator.
+`upstream_task` exits on `end_session` and closes the `LiveRequestQueue`, but
+closing the queue does **not** terminate the `run_live()` async generator that
+`downstream_task` is iterating. So the gather waited forever.
 
-**Confirmed NOT a regression from this round:** the diff `8699843..ebfb55c`
-does not touch `end_session`, the `gather`, or `run_live`. Pre-existing, and it
-has been latent through every prior round because no agent could reach the
-debrief screen and no human test happened to wait for it.
+> **A correction worth recording, because it nearly became a false claim.** The
+> first evidence cited for this was "a log line at the top of the `finally`
+> never appears". That evidence was **invalid**: the line was `logger.info`, and
+> under uvicorn this app's logger only surfaces at WARNING, so its absence
+> proved nothing. The diagnosis happened to be right, but it was carried by the
+> behavioural evidence alone (no debrief frame on the wire across seven sessions
+> before the change; a debrief 5-6 s after the click once the shutdown order
+> changed, with nothing else touched). The log line is now `logger.warning` and
+> does appear. Stated plainly here because this round's whole lesson is
+> "measure, don't assume" — and one of the measurements was measuring nothing.
 
-**Also confirmed, so the fix has something to work with:** in a real browser
-session `event.turn_complete` fires correctly (measured: twice in a two-turn
-session, `wit_len=175` and `wit_len=181`), so `transcript_lines` and
-`scored_events` do populate. The debrief would have real content the moment the
-handler is allowed to reach it. (A raw-websocket harness does *not* produce
-turn-ends — worth knowing before anyone re-tests this and draws the wrong
-conclusion from an empty transcript.)
+**Fix (approved by the user mid-round, since it sits in the voice-pipeline
+shutdown the fix order had declared tabu):** stop awaiting both halves
+together. Await the upstream task, close the queue, give the response stream a
+2-second grace period to drain, then cancel it. **Nothing in audio handling,
+`RunConfig` or `SpeechConfig` was touched — only the order in which the two
+tasks are shut down.**
 
-**Fixed this round (safe, in-scope part only):** the debrief block's
-`except Exception: pass` — a silent swallow that would have left the user in an
-empty room with no message even once the hang is fixed — now logs the exception
-and sends the client an error frame.
+Also fixed: the debrief block's `except Exception: pass`, a silent swallow that
+would have left the user in an empty room with no message even after the hang
+was gone. It now logs and sends the client an error frame.
 
-**NOT fixed:** the hang itself. The fix lives in the shutdown sequencing around
-`run_live` — i.e. inside the voice-pipeline core this round's fix order
-explicitly declared tabu. Changing it unilaterally at feature-freeze, on the
-one part of the system that took two rounds to get working, is the user's call,
-not the builder's. The shape of the fix is small and does not touch audio
-handling or `SpeechConfig`: stop awaiting both tasks together — await the
-upstream task, then cancel the downstream task after a short grace period, so
-the handler reaches its `finally`.
+**Verified end to end in a real browser session** (fake mic, real Live API,
+real click on "End session."):
+
+| | |
+|---|---|
+| `turn_complete` fired | yes (`wit_len=187`) |
+| rubric sidebar during the session | 1 scored line |
+| debrief arrived | **5.0 s** after the click, view visible |
+| AMTA score | 3 |
+| headline | *"Session closed; cross-examination failed to maintain witness control due to open-ended questioning."* |
+| transcript lines | 2 |
+| moments, with citations | 2, both `[D-01]` |
+| technique-column download (FEATURE 8) | present, sidebar score lines carried over |
+
+**Not a regression from this round:** `git diff 8699843..ebfb55c` touches
+neither `end_session`, the `gather`, nor `run_live`. Pre-existing and latent
+through every prior round, because no agent could reach the debrief screen and
+no human test happened to wait for it.
+
+**One thing to know before anyone re-tests this:** a raw-websocket harness does
+**not** produce turn-ends — `turn_complete` needs a continuously flowing input
+stream, which a real microphone always provides but a finite WAV played with
+`%noloop` does not. A test that stops feeding audio will get a debrief that
+correctly says "no exchanges recorded", and that is the harness, not the
+product.
+
+## GAP — expert_dossier.md test case T-01 does not match the product
+
+T-01 assumes a "Direct examination" sub-mode. It does not exist: every case is
+cross-exam-only, where the rubric *rewards* leading questions — the opposite
+polarity of what T-01 tests. The dossier test case needs rewriting or dropping;
+it cannot pass as written.
+
+### Live verification of the debrief fix — and one caveat for the recording day
+
+On the deployed revision `the-stand-00020-5w4`:
+
+| Run | Case | Debrief | Score | Moments |
+|---|---|---|---|---|
+| 1 | martinez_v_nordbay | **no debrief** | — | — |
+| 2 | martinez_v_nordbay | 8.1 s | AMTA 3 | 2 × `[D-01]` |
+| 3 | discovery_call_de | 6.0 s | AMTA 4 | 2 × `[S-01]` |
+
+Run 1 is recorded rather than dropped, because it matters for the shoot: it was
+fired **seconds after the deploy finished**, against an instance that was still
+starting (Cloud Run logs for that revision showed "Starting new instance" and
+only 7 log lines total). The debrief did not arrive. Runs 2 and 3, against the
+same revision once warm, both delivered a full debrief with real cited moments —
+including the German case, which correctly cites the sales rubric `[S-01]`
+rather than the courtroom `[D-01]`.
+
+**Practical rule for the recording:** do not take the first session after a
+deploy. Warm the service with one throwaway session first, then record.
